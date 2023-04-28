@@ -509,6 +509,8 @@ class REPEX_state(object):
         out = np.zeros(shape=arr.shape, dtype="float128")
         n = len(arr)
         for i in range(n):
+            arr[i,:]/=np.max(arr[i,:])
+        for i in range(n):
             rows = [r for r in range(n) if r != i]
             sub_arr = arr[rows, :]
             for j in range(n):
@@ -600,7 +602,7 @@ class REPEX_state(object):
             sign = -sign
             old_grey = new_grey
 
-        return total//num_loops
+        return total/num_loops
 
     def write_toml(self, ens_sel=(), input_traj=()):
         self.config['current']['active'] = self.live_paths()
