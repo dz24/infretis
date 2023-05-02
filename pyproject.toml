@@ -3,7 +3,7 @@ name = "infretis"
 version = "0.0.1"
 
 [build-system]
-requires = ["setuptools"]
+requires = ["setuptools", "distributed==2023.3.0", "dask==2023.3.0", "tomli_w"]
 build-backend = "setuptools.build_meta"
 
 [project.scripts]
