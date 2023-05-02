@@ -833,6 +833,7 @@ class test_infretisrun(unittest.TestCase):
             # copy files from template folder
             shutil.copy(f'../data/wf.rst', './retis.rst')
             shutil.copy(f'../data/wf40steps.txt', './infretis_data.txt')
+            shutil.copy(f'../data/wf40steps.toml', './restart.toml')
             for ens in range(8):
                 os.mkdir(f'00{ens}')
             os.system("infretisanalyze -i infretis_data.txt >| out.txt")
@@ -842,7 +843,7 @@ class test_infretisrun(unittest.TestCase):
             with open('./report/retis_report.rst', 'r') as read:
                 for idx, line in enumerate(read):
                     if 'f_{A}' in line:
-                        istrue = '0.412036268' in line
+                        istrue = '0.416824061' in line
                         break
                     if idx == 15:
                         break

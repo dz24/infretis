@@ -1,7 +1,9 @@
 import numpy as np
+import os
+import tomli
 HEAD = '#     Step    No.-acc  No.-shoot l m r  Length Acc Mc            Min-O            Max-O Idx-Min Idx-Max          O-shoot  Idx-sh Idx-shN  Weight'
 
-def read_infinity(inp):
+def read_infinity(inp, rfile='restart.toml'):
     path_dic = {}
     with open(inp, 'r') as read:
         for idx, line in enumerate(read):
@@ -17,6 +19,36 @@ def read_infinity(inp):
             for idx, (frac, weight) in enumerate(zip(split[3:3+split_len], split[3+split_len:3+split_len*2])):
                 if '-' not in frac or '-' not in weight:
                     path_dic[path_no][f'{idx:03.0f}'] = (np.float128(frac), float(weight))
+
+    userestart = False
+    if os.path.isfile('restart.toml'):
+        with open('./restart.toml', mode="rb") as f:
+            restart = tomli.load(f)
+        if restart.get('current', False):
+            keys = restart['current'].keys()
+            if all(i in keys for i in ['frac', 'weights', 'max_op', 'length']):
+                userestart = True
+                pns = list(restart['current']['frac'].keys())
+
+    if userestart:
+        dic_keys = list(path_dic.keys())
+        for pn in pns:
+            # make sure we are not overwriting existing pn
+            ipn = int(pn)
+            assert(ipn not in dic_keys)
+
+            path_dic[ipn] = {}
+            path_dic[ipn]['len'] = int(restart['current']['length'][pn])
+            path_dic[ipn]['max_op'] = float(restart['current']['max_op'][pn])
+            # to align weights with frac..
+            weights = list(restart['current']['weights'][pn])
+            if len(restart['current']['weights'][pn]) > 1:
+                weights = [0.0] + weights
+            for idx, (frac, weight) in enumerate(zip(restart['current']['frac'][pn],
+                                                     weights)):
+                if str(0.0) not in (frac, weight):
+                    path_dic[ipn][f'{idx:03.0f}'] = (np.float128(frac), float(weight))
+
     return path_dic, split_len
 
 
