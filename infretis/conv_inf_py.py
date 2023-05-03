@@ -67,6 +67,8 @@ def print_pathens(inp):
     for i in keys:
         for ens in enss:
             if ens in dic[i].keys():
+                with open(f"./{ens}/mapperfile{ens}.txt","a") as mapperfile:
+                    print(steps[ens],i,file=mapperfile)
                 pline = f'{steps[ens]:10.0f} {steps[ens]:10.0f} {steps[ens]:10.0f}'
                 pline += ' R R R \t'
                 pline += f"  {dic[i]['len']:4.0f} ACC {moves[ens]}"
