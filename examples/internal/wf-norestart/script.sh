@@ -1,5 +1,5 @@
 bash clean.sh
-cp ../../../test/examples/internal/data/wf.rst retis.rst
+#cp ../../../test/examples/internal/data/wf.rst retis.rst
 cp ../../../test/examples/internal/data/initial.xyz initial.xyz
 rm -r trajs ;
 mkdir trajs ;
@@ -14,6 +14,6 @@ cp -r 5 e5
 cp -r 6 e6
 cp -r 7 e7
 cd ..
-infretisrun -i infretis.toml >| out.txt
+infretisrun -i infretis.toml # >| out.txt
 # infretisanalyze -i infretis_data.txt -p pattern.txt
 # pyretisanalyse -i retis.rst # to produce report

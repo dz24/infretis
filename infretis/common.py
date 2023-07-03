@@ -6,7 +6,7 @@ import logging
 from datetime import datetime
 from pyretis.inout.formats.formatter import get_log_formatter
 from pyretis.core.tis import select_shoot
-from pyretis.core.retis import retis_swap_zero
+from pyretis.core.retis import retis_swap_zero, ppretis_swap
 from pyretis.setup import create_simulation
 from pyretis.inout.settings import parse_settings_file
 from pyretis.inout.restart import write_ensemble_restart
@@ -80,7 +80,7 @@ def run_md(md_items):
         if not md_items['internal']:
             ensembles_l[0]['engine'].clean_up()
             ensembles_l[1]['engine'].clean_up()
-        accept, trials, status = retis_swap_zero(ensembles_l, md_items['settings'], 0)
+        accept, trials, status = ppretis_swap(ensembles_l, 0, md_items['settings'], 0)
 
     for trial, ens_num, ifaces in zip(trials, ens_nums, interfaces):
         md_items['moves'].append(md_items['mc_moves'][ens_num+1])
@@ -270,6 +270,7 @@ def setup_internal(input_file):
     if not config['simulation']['internal']:
         traj_num_dic[pnum]['adress'] = set(os.path.basename(kk.particles.config[0]) for kk in path.phasepoints)
 
+    # Ensemble definitions can be changed here to PPTIS QQQQQ 
     state.ensembles = {i: sim.ensembles[i] for i in range(len(sim.ensembles))}
     sim.settings['initial-path']['load_folder'] = 'trajs'
     state.pyretis_settings = sim.settings
@@ -291,7 +292,7 @@ def setup_dask(config, workers):
         client.upload_file(module)
     futures = as_completed(None, with_results=True)
     # create worker logs
-    client.run(set_logger)
+    # client.run(set_logger)
     return client, futures
 
 def pwd_checker(state):
