@@ -133,6 +133,7 @@ def treat_output(state, md_items):
 
         state.ensembles[ens_num+1] = ensembles[ens_num+1]
         # if path is new: number and save the path:
+        print("traj_out: ", dir(out_traj))
         if out_traj.path_number == None or md_items['status'] == 'ACC':
             # move to accept:
             ens_save_idx = traj_num_dic[pn_old]['ens_save_idx']

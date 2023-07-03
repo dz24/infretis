@@ -155,20 +155,23 @@ class REPEX_state(object):
         return tuple(enss), tuple(trajs)
 
     def pick(self):
+
+        # self.n: number of ensembles + 1 
+        # self.prob: probability matrix. the columns are the ensembles, the rows
+        # are the trajectories. 
+        print("prob", self.prob.astype("float64"))
         prob = self.prob.astype("float64").flatten()
         p = np.random.choice(self.n**2, p=np.nan_to_num(prob/np.sum(prob)))
         traj, ens = np.divmod(p, self.n)
         self.swap(traj, ens)
+        print("ens_nums", ens)
+        print("locks", self._locks)
         self.lock(ens)
         traj = self._trajs[ens]
         # If available do 0+- swap with 50% probability
 
         ens_nums = (ens-self._offset,)
         inp_trajs = (traj,)
-        
-        print("BLOBLOB", self._offset)
-        print(" N NUMBER: ", self.n)
-
         # 1) Pick ensemble number
         # 2) Take random number. If >: shoot. If <: swap. 
         # 2b) swap: choose neighbour (left or right, 50%). --> CHeck if locked
@@ -243,12 +246,22 @@ class REPEX_state(object):
         # self.result.update_run_total_prob()
 
     def add_traj(self, ens, traj, valid, count=True, n=0):
-
+        logger.info(f"ens {ens}")
+        logger.info(f"old valid:  {valid}")
+        validtmp = np.zeros(self.n)
+        validtmp[ens] = 1.
+        return validtmp
         if ens >= 0 and self._offset != 0:
             valid = tuple([0 for _ in range(self._offset)] + list(valid))
         elif ens < 0:
             valid = tuple(list(valid) +
                           [0 for _ in range(self.n - self._offset)])
+        logger.info(f"mid valid:  {valid}")
+        argmax = np.argmax(valid[::-1])
+        valid = [0 for _ in range(len(valid))]
+        valid[-argmax-2] = 1
+        valid = tuple(valid)
+        logger.info(f"new valid:  {valid}")
         ens += self._offset
         assert valid[ens] != 0
         # invalidate last prob
@@ -365,10 +378,14 @@ class REPEX_state(object):
 
     @property
     def prob(self):
-        if self._last_prob is None:
-            prob = self.inf_retis(abs(self.state), self._locks)
-            self._last_prob = prob.copy()
-        return self._last_prob
+        prop = np.identity(self.n)
+        prop[-1,-1] = 0.
+        self._last_prob = prop.copy()
+        return prop
+        # if self._last_prob is None:
+        #     prob = self.inf_retis(abs(self.state), self._locks)
+        #     self._last_prob = prob.copy()
+        # return self._last_prob
 
     def inf_retis(self, input_mat, locks):
         # Drop locked rows and columns
