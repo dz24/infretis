@@ -180,7 +180,7 @@ class REPEX_state(object):
 
         if np.random.random() < self.zeroswap: 
             if ens == 0:  # swap_zero if we choose [0-]
-                neigb = ens + 1
+                neighb = ens + 1
             elif ens == self.n - 2:  # last ensemble, only swap left
                 neighb = ens - 1
             elif ens < self.n - 2 :
@@ -188,6 +188,7 @@ class REPEX_state(object):
             other_traj = self.pick_traj_ens(neighb)
             sorted_idx = np.argsort([neighb, ens])
             ens_nums = tuple(np.array([neighb, ens])[sorted_idx]-1)
+            logger.info("Swapping %s and %s" % (neighb, ens))
             inp_trajs = tuple(np.array([other_traj, traj])[sorted_idx])
 
         print("ens_nums", ens_nums)
@@ -246,22 +247,19 @@ class REPEX_state(object):
         # self.result.update_run_total_prob()
 
     def add_traj(self, ens, traj, valid, count=True, n=0):
-        logger.info(f"ens {ens}")
-        logger.info(f"old valid:  {valid}")
         validtmp = np.zeros(self.n)
-        validtmp[ens] = 1.
-        return validtmp
         if ens >= 0 and self._offset != 0:
             valid = tuple([0 for _ in range(self._offset)] + list(valid))
         elif ens < 0:
             valid = tuple(list(valid) +
                           [0 for _ in range(self.n - self._offset)])
-        logger.info(f"mid valid:  {valid}")
-        argmax = np.argmax(valid[::-1])
-        valid = [0 for _ in range(len(valid))]
-        valid[-argmax-2] = 1
-        valid = tuple(valid)
-        logger.info(f"new valid:  {valid}")
+        # logger.info(f"mid valid:  {valid}")
+        # argmax = np.argmax(valid[::-1])
+        # valid = [0 for _ in range(len(valid))]
+        # valid[-argmax-2] = 1
+        # valid = tuple(valid)
+        validtmp[ens+1] = 1.
+        valid = validtmp
         ens += self._offset
         assert valid[ens] != 0
         # invalidate last prob

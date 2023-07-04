@@ -15,6 +15,7 @@ from pyretis.inout.common import make_dirs
 from infretis.inf_core import REPEX_state
 from dask.distributed import dask, Client, as_completed, get_worker
 from pyretis.core.common import compute_weight
+from pprint import pprint
 dask.config.set({'distributed.scheduler.work-stealing': False})
 logger = logging.getLogger('')
 logger.setLevel(logging.DEBUG)
@@ -71,16 +72,32 @@ def run_md(md_items):
                                               start_cond)
         trials = [trials]
 
-    else:
+    elif len(ens_nums) == 2 and -1 in ens_nums:  # swap_zero
+        logger.info(f"len(ens_nums):  {len(ens_nums)}")
+        logger.info(f"ens_nums:  {ens_nums}")
         ensembles_l = [ensembles[i+1] for i in ens_nums]
         pnums = [ensembles_l[0]['path_ensemble'].last_path.path_number,
                  ensembles_l[1]['path_ensemble'].last_path.path_number]
-        logger.info(f"Shooting sh sh in ensembles: 000 001"\
+        logger.info(f"Shooting sh sh in ensembles: {ens_nums[0]} <-> {ens_nums[1]}"\
                     f" with paths: {pnums} and worker: {md_items['pin']}")
         if not md_items['internal']:
             ensembles_l[0]['engine'].clean_up()
             ensembles_l[1]['engine'].clean_up()
-        accept, trials, status = ppretis_swap(ensembles_l, 0, md_items['settings'], 0)
+        accept, trials, status = retis_swap_zero(ensembles_l, md_items['settings'], 0)
+
+    else:
+        logger.info(f"len(ens_nums):  {len(ens_nums)}")
+        logger.info(f"ens_nums:  {ens_nums}")
+        ensembles_l = [ensembles[i+1] for i in ens_nums]
+        pnums = [ensembles_l[0]['path_ensemble'].last_path.path_number,
+                 ensembles_l[1]['path_ensemble'].last_path.path_number]
+        logger.info(f"Shooting sh sh in ensembles: {ens_nums[0]} <-> {ens_nums[1]}"\
+                    f" with paths: {pnums} and worker: {md_items['pin']}")
+        if not md_items['internal']:
+            ensembles_l[0]['engine'].clean_up()
+            ensembles_l[1]['engine'].clean_up()
+        accept, trials, status = ppretis_swap(ensembles_l,0, md_items['settings'], 
+                                              pnums[0])
 
     for trial, ens_num, ifaces in zip(trials, ens_nums, interfaces):
         md_items['moves'].append(md_items['mc_moves'][ens_num+1])
@@ -96,7 +113,9 @@ def run_md(md_items):
             logger.info('The move was accepted!')
         else:
             logger.info('The move was rejected!')
-
+        msg = md_items.keys()
+        logger.info(f"md_items: {msg}")
+        logger.info(f"md_items['pn_old']: {md_items['pnum_old']}")
     end_time = datetime.now()
     delta_time = end_time - start_time
     logger.info(end_time.strftime(DATE_FORMAT) +
@@ -136,9 +155,14 @@ def treat_output(state, md_items):
         print("traj_out: ", dir(out_traj))
         if out_traj.path_number == None or md_items['status'] == 'ACC':
             # move to accept:
+            logger.info(f"pn_old: {pn_old}")
+            logger.info(f"traj_num_dic: {traj_num_dic}")
             ens_save_idx = traj_num_dic[pn_old]['ens_save_idx']
+            logger.info(f"Shark")
+            logger.info(f"ens_save_idx: {ens_save_idx}")
             state.ensembles[ens_save_idx]['path_ensemble'].store_path(out_traj)
             out_traj.path_number = traj_num
+            print("zerba: ", out_traj.path_number)
             traj_num_dic[traj_num] = {'frac': np.zeros(state.n, dtype="float128"),
                                       'max_op': out_traj.ordermax,
                                       'length': out_traj.length,
@@ -194,7 +218,7 @@ def setup_internal(input_file):
     # setup logger
     fileh = logging.FileHandler('sim.log', mode='a')
     log_levl = getattr(logging, 'info'.upper(),
-                       logging.INFO)
+                       logging.DEBUG)
     fileh.setLevel(log_levl)
     fileh.setFormatter(get_log_formatter(log_levl))
     logger.addHandler(fileh)
@@ -293,7 +317,7 @@ def setup_dask(config, workers):
         client.upload_file(module)
     futures = as_completed(None, with_results=True)
     # create worker logs
-    # client.run(set_logger)
+    client.run(set_logger)
     return client, futures
 
 def pwd_checker(state):
@@ -432,7 +456,7 @@ def set_logger():
     log = logging.getLogger()
     fileh = logging.FileHandler(f"worker{pin}.log", mode='a')
     log_levl = getattr(logging, 'info'.upper(),
-                       logging.INFO)
+                       logging.DEBUG)
     fileh.setLevel(log_levl)
     fileh.setFormatter(get_log_formatter(log_levl))
     logger.addHandler(fileh)

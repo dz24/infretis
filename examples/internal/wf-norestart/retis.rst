@@ -41,7 +41,7 @@ shooting_moves = ['sh', 'sh', 'sh', 'sh', 'sh', 'sh', 'sh', 'sh','sh', 'sh', 'sh
 
 RETIS settings
 --------------
-swapfreq = 0.5
+swapfreq = 0.0
 relative_shoots = None
 nullmoves = True
 swapsimul = True
