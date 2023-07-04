@@ -1,5 +1,5 @@
 [dask]
-workers = 1
+workers = 7
 
 [simulation]
 pyretis_inp = "retis.rst"

@@ -14,10 +14,9 @@ cp ../../../test/examples/internal/data/initial.xyz initial.xyz
 #cp -r 6 e6
 #cp -r 7 e7
 #cd ..
-#rm trajs/ 
+#rm trajs/
 mkdir trajs/
 cp bkptrajs/* trajs/ -r
-
-infretisrun -i infretis.toml # >| out.txt
+time infretisrun -i infretis.toml # >| out.txt
 # infretisanalyze -i infretis_data.txt -p pattern.txt
 # pyretisanalyse -i retis.rst # to produce report

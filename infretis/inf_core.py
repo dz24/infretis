@@ -159,14 +159,18 @@ class REPEX_state(object):
         # self.n: number of ensembles + 1 
         # self.prob: probability matrix. the columns are the ensembles, the rows
         # are the trajectories. 
+        print("----------------------")
         print("prob", self.prob.astype("float64"))
-        prob = self.prob.astype("float64").flatten()
+        prob = (self.prob.astype("float64")).flatten()
+        print("lockprob", [int(np.reshape(prob, (self.n, self.n))[i,i]) for i in range(self.n)])
+        print("locs: ", self._locks)
         p = np.random.choice(self.n**2, p=np.nan_to_num(prob/np.sum(prob)))
         traj, ens = np.divmod(p, self.n)
         self.swap(traj, ens)
         print("ens_nums", ens)
-        print("locks", self._locks)
         self.lock(ens)
+        print("locks after locking", self._locks)
+        print("----------------------")
         traj = self._trajs[ens]
         # If available do 0+- swap with 50% probability
 
@@ -185,11 +189,14 @@ class REPEX_state(object):
                 neighb = ens - 1
             elif ens < self.n - 2 :
                 neighb = ens + np.random.choice([-1,1])
-            other_traj = self.pick_traj_ens(neighb)
-            sorted_idx = np.argsort([neighb, ens])
-            ens_nums = tuple(np.array([neighb, ens])[sorted_idx]-1)
-            logger.info("Swapping %s and %s" % (neighb, ens))
-            inp_trajs = tuple(np.array([other_traj, traj])[sorted_idx])
+            if self._locks[neighb] == 0:
+                # if neighbour is not locked, do sth
+                other_traj = self.pick_traj_ens(neighb)
+                sorted_idx = np.argsort([neighb, ens])
+                ens_nums = tuple(np.array([neighb, ens])[sorted_idx]-1)
+                logger.info("Swapping %s and %s" % (neighb, ens))
+                inp_trajs = tuple(np.array([other_traj, traj])[sorted_idx])
+                
 
         print("ens_nums", ens_nums)
      
@@ -382,7 +389,7 @@ class REPEX_state(object):
         prop = np.identity(self.n)
         prop[-1,-1] = 0.
         self._last_prob = prop.copy()
-        return prop
+        return prop*(1-np.array(self._locks)) 
         # if self._last_prob is None:
         #     prob = self.inf_retis(abs(self.state), self._locks)
         #     self._last_prob = prob.copy()
