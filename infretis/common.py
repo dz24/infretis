@@ -156,7 +156,7 @@ def treat_output(state, md_items):
 
         state.ensembles[ens_num+1] = ensembles[ens_num+1]
         # if path is new: number and save the path:
-        print("traj_out: ", dir(out_traj))
+        #print("traj_out: ", dir(out_traj))
         if out_traj.path_number == None or md_items['status'] == 'ACC':
             # move to accept:
             logger.info(f"pn_old: {pn_old}")
@@ -166,7 +166,7 @@ def treat_output(state, md_items):
             logger.info(f"ens_save_idx: {ens_save_idx}")
             state.ensembles[ens_save_idx]['path_ensemble'].store_path(out_traj)
             out_traj.path_number = traj_num
-            print("zerba: ", out_traj.path_number)
+            #print("zerba: ", out_traj.path_number)
             traj_num_dic[traj_num] = {'frac': np.zeros(state.n, dtype="float128"),
                                       'max_op': out_traj.ordermax,
                                       'length': out_traj.length,

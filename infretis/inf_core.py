@@ -159,18 +159,18 @@ class REPEX_state(object):
         # self.n: number of ensembles + 1 
         # self.prob: probability matrix. the columns are the ensembles, the rows
         # are the trajectories. 
-        print("----------------------")
-        print("prob", self.prob.astype("float64"))
+        #print("----------------------")
+        #print("prob", self.prob.astype("float64"))
         prob = (self.prob.astype("float64")).flatten()
-        print("lockprob", [int(np.reshape(prob, (self.n, self.n))[i,i]) for i in range(self.n)])
-        print("locs: ", self._locks)
+        #print("lockprob", [int(np.reshape(prob, (self.n, self.n))[i,i]) for i in range(self.n)])
+        #print("locs: ", self._locks)
         p = np.random.choice(self.n**2, p=np.nan_to_num(prob/np.sum(prob)))
         traj, ens = np.divmod(p, self.n)
         self.swap(traj, ens)
-        print("ens_nums", ens)
+        #print("ens_nums", ens)
         self.lock(ens)
-        print("locks after locking", self._locks)
-        print("----------------------")
+        #print("locks after locking", self._locks)
+        #print("----------------------")
         traj = self._trajs[ens]
         # If available do 0+- swap with 50% probability
 
@@ -198,7 +198,7 @@ class REPEX_state(object):
                 inp_trajs = tuple(np.array([other_traj, traj])[sorted_idx])
                 
 
-        print("ens_nums", ens_nums)
+        #print("ens_nums", ens_nums)
      
         # if ((
         #      (ens == self._offset and not self._locks[self._offset-1]) or
