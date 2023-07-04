@@ -371,6 +371,9 @@ class REPEX_state(object):
                 logger.info(f'------- submit worker {self.cworker} START ------- ' +
                              datetime.now().strftime(DATE_FORMAT))
         self.toinitiate -= 1
+
+        md_items['n'] = self.n
+
         return self.toinitiate >= 0
 
 

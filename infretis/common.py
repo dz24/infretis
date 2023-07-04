@@ -108,7 +108,11 @@ def run_md(md_items):
         logger.info(f'Move finished with trial path lenght of {trial.length}')
         log_mdlogs(f'{ens_num+1:03}/generate/')
         if status == 'ACC':
-            trial.traj_v = calc_cv_vector(trial, ifaces, md_items['mc_moves'])
+            valid = np.zeros(md_items['n'])
+            valid[ens_num] = 1.
+            trial.traj_v = valid
+            if ens_num == -1: 
+                trial.traj_v = (1.,)
             ensembles[ens_num+1]['path_ensemble'].last_path = trial
             logger.info('The move was accepted!')
         else:
@@ -269,7 +273,9 @@ def setup_internal(input_file):
     for i in range(size-1):
         # we add all the i+ paths.
         path = sim.ensembles[i+1]['path_ensemble'].last_path
-        path.traj_v = calc_cv_vector(path, interfaces, state.mc_moves)
+        valid = np.zeros(state.n)
+        valid[i] = 1.
+        path.traj_v = valid
         state.add_traj(ens=i, traj=path, valid=path.traj_v, count=False)
         pnum = path.path_number
         frac = config['current']['frac'].get(str(pnum), np.zeros(size+1))
@@ -375,21 +381,22 @@ def prep_pyretis(state, md_items, inp_traj, ens_nums):
         md_items[key] = []
     md_items.update({'ens_nums': ens_nums})
 
-def calc_cv_vector(path, interfaces, moves):
-    path_max, _ = path.ordermax
+# def calc_cv_vector(path, interfaces, moves):
+#     path_max, _ = path.ordermax
+    
 
-    cv = []
-    if len(interfaces) == 1:
-        return (1. if interfaces[0] <= path_max else 0.,)
+#     cv = []
+#     if len(interfaces) == 1:
+#         return (1. if interfaces[0] <= path_max else 0.,)
 
-    for idx, intf_i in enumerate(interfaces[:-1]):
-        if moves[idx+1] == 'wf':
-            intfs = [interfaces[0], intf_i, interfaces[-1]]
-            cv.append(compute_weight(path, intfs, moves[idx+1]))
-        else:
-            cv.append(1. if intf_i <= path_max else 0.)
-    cv.append(0.)
-    return(tuple(cv))
+#     for idx, intf_i in enumerate(interfaces[:-1]):
+#         if moves[idx+1] == 'wf':
+#             intfs = [interfaces[0], intf_i, interfaces[-1]]
+#             cv.append(compute_weight(path, intfs, moves[idx+1]))
+#         else:
+#             cv.append(1. if intf_i <= path_max else 0.)
+#     cv.append(0.)
+#     return(tuple(cv))
 
 def setup_config(config, size):
 
@@ -476,6 +483,7 @@ def write_to_pathens(state, pn_archive):
             string += f"{traj_num_dic[pn]['max_op'][0]:8.5f}" + '\t'
             frac = []
             weight = []
+            logger.info(f'traj_num_dic: {traj_num_dic[pn]}')
             if len(traj_num_dic[pn]['traj_v']) == 1:
                 f0 = traj_num_dic[pn]['frac'][0]
                 w0 = traj_num_dic[pn]['traj_v'][0]
@@ -492,6 +500,6 @@ def write_to_pathens(state, pn_archive):
                 for w0, f0 in zip(traj_num_dic[pn]['traj_v'][:-1],
                                   traj_num_dic[pn]['frac'][1:-1]):
                     frac.append('----' if f0 == 0.0 else str(f0))
-                    weight.append('----' if f0 == 0.0 else str(w0))
+                    weight.append('----' if w0 == 0.0 else str(w0))
             fp.write(string + '\t'.join(frac) + '\t' + '\t'.join(weight) + '\t\n')
             traj_num_dic.pop(pn)

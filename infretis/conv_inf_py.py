@@ -16,8 +16,13 @@ def read_infinity(inp, rfile='restart.toml'):
             path_dic[path_no]['len'] = int(split[1])
             path_dic[path_no]['max_op'] = float(split[2])
             split_len = int(len(split[3:])/2)
+            print("split", split)
+            print(split[3:3+split_len])
+            print(split[3+split_len:3+split_len*2])
             for idx, (frac, weight) in enumerate(zip(split[3:3+split_len], split[3+split_len:3+split_len*2])):
-                if '-' not in frac or '-' not in weight:
+                if '-' not in frac and '-' not in weight:
+                    print("frac", frac)
+                    print("weight", weight)
                     path_dic[path_no][f'{idx:03.0f}'] = (np.float128(frac), float(weight))
 
     userestart = False
