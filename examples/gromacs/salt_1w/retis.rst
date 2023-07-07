@@ -15,9 +15,9 @@ Engine
 ------
 class = gromacs2    # more effective than gromacs class
 gmx = gmx
-mdrun = gmx mdrun
+mdrun = gmx mdrun -ntomp 4 -ntmpi 1 -nt 4 -gpu_id 0 -pin on -pinoffset 0 -pinstride 1
 input_path = ./../salt_data/gromacs_input
-timestep = 0.0005
+timestep = 0.002
 subcycles = 1
 gmx_format = g96
 maxwarn = 15
@@ -30,7 +30,7 @@ aimless = True
 allowmaxlength = False
 zero_momentum = False
 rescale_energy = False
-shooting_moves = ['sh', 'sh', 'wf', 'wf', 'wf', 'wf', 'wf']
+shooting_moves = ['sh', 'sh', 'sh', 'sh', 'sh', 'sh', 'sh']
 # shooting_moves = ['sh', 'sh', 'sh', 'sh', 'sh']
 n_jumps = 3
 sigma_v = -1

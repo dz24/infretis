@@ -10,6 +10,7 @@ from pyretis.core.retis import retis_swap_zero, ppretis_swap
 from pyretis.setup import create_simulation
 from pyretis.inout.settings import parse_settings_file
 from pyretis.inout.restart import write_ensemble_restart
+import subprocess
 from pyretis.inout.archive import PathStorage
 from pyretis.inout.common import make_dirs
 from infretis.inf_core import REPEX_state
@@ -51,6 +52,7 @@ def run_bm(md_items):
     return md_items
 
 def run_md(md_items):
+    logger.info(f"Worker {md_items['pin']} is running.")
     md_items['wmd_start'] = time.time()
     ens_nums = md_items['ens_nums']
     ensembles = md_items['ensembles']
@@ -65,6 +67,13 @@ def run_md(md_items):
         logger.info(f"Shooting {move} in ensemble: {enum}"\
                     f" with path: {pnum} and worker: {md_items['pin']}")
         start_cond = ensembles[ens_nums[0]+1]['path_ensemble'].start_condition
+
+        pathold = ensembles[ens_nums[0]+1]['path_ensemble'].last_path
+        print(f"monkey the file {pathold.phasepoints[0].particles.config[0]}")
+        print(f"monkey the file {pathold.phasepoints[-1].particles.config[0]}")
+        print(f"monkey does the file exist: {os.path.exists(pathold.phasepoints[0].particles.config[0])}")
+        print(f"monkey does the file exist: {os.path.exists(pathold.phasepoints[-1].particles.config[0])}")
+
         if not md_items['internal']:
             ensembles[ens_nums[0]+1]['engine'].clean_up()
         accept, trials, status = select_shoot(ensembles[ens_nums[0]+1],
@@ -127,6 +136,16 @@ def run_md(md_items):
     md_items.update({'status': status,
                      'interfaces': interfaces,
                      'wmd_end': time.time()})
+    logger.info(f"Worker {md_items['pin']} is done.")
+    logger.info(f"the file {trials[0].phasepoints[0].particles.config[0]}")
+    logger.info(f"the file {trials[0].phasepoints[-1].particles.config[0]}")
+    filename = trials[0].phasepoints[0].particles.config[0]
+    logger.info(f"does the file exist: {os.path.exists(trials[0].phasepoints[0].particles.config[0])}")
+    logger.info(f"does the file exist: {os.path.exists(trials[0].phasepoints[-1].particles.config[0])}")
+    p = subprocess.Popen(["ls", filename], stdout=subprocess.PIPE)
+    out, err = p.communicate()
+    logger.info(f"out: {out}")
+    logger.info(f"err: {err}")
     return md_items
 
 def log_mdlogs(inp):
@@ -164,7 +183,11 @@ def treat_output(state, md_items):
             ens_save_idx = traj_num_dic[pn_old]['ens_save_idx']
             logger.info(f"Shark")
             logger.info(f"ens_save_idx: {ens_save_idx}")
+            for i in out_traj.phasepoints:
+                logger.info(f"before i: {i}")
             state.ensembles[ens_save_idx]['path_ensemble'].store_path(out_traj)
+            for i in out_traj.phasepoints:
+                logger.info(f"after i: {i}")
             out_traj.path_number = traj_num
             #print("zerba: ", out_traj.path_number)
             traj_num_dic[traj_num] = {'frac': np.zeros(state.n, dtype="float128"),
@@ -212,6 +235,7 @@ def treat_output(state, md_items):
     state.sort_trajstate()
     state.config['current']['traj_num'] = traj_num
     state.cworker = md_items['pin']
+    print("md_items: ", md_items)
     state.print_shooted(md_items, pn_news)
     # save for possible restart
     state.save_rng()
@@ -221,7 +245,7 @@ def setup_internal(input_file):
 
     # setup logger
     fileh = logging.FileHandler('sim.log', mode='a')
-    log_levl = getattr(logging, 'info'.upper(),
+    log_levl = getattr(logging, 'debug'.upper(),
                        logging.DEBUG)
     fileh.setLevel(log_levl)
     fileh.setFormatter(get_log_formatter(log_levl))
@@ -318,7 +342,7 @@ def setup_internal(input_file):
     return md_items, state, config
 
 def setup_dask(config, workers):
-    client = Client(n_workers=workers)
+    client = Client(n_workers=workers,)
     for module in config['dask'].get('files', []):
         client.upload_file(module)
     futures = as_completed(None, with_results=True)
@@ -462,7 +486,7 @@ def set_logger():
     pin = get_worker().name
     log = logging.getLogger()
     fileh = logging.FileHandler(f"worker{pin}.log", mode='a')
-    log_levl = getattr(logging, 'info'.upper(),
+    log_levl = getattr(logging, 'debug'.upper(),
                        logging.DEBUG)
     fileh.setLevel(log_levl)
     fileh.setFormatter(get_log_formatter(log_levl))
