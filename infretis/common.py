@@ -16,7 +16,6 @@ from pyretis.inout.common import make_dirs
 from infretis.inf_core import REPEX_state
 from dask.distributed import dask, Client, as_completed, get_worker
 from pyretis.core.common import compute_weight
-from pprint import pprint
 dask.config.set({'distributed.scheduler.work-stealing': False})
 logger = logging.getLogger('')
 logger.setLevel(logging.DEBUG)
@@ -69,10 +68,10 @@ def run_md(md_items):
         start_cond = ensembles[ens_nums[0]+1]['path_ensemble'].start_condition
 
         pathold = ensembles[ens_nums[0]+1]['path_ensemble'].last_path
-        print(f"monkey the file {pathold.phasepoints[0].particles.config[0]}")
-        print(f"monkey the file {pathold.phasepoints[-1].particles.config[0]}")
-        print(f"monkey does the file exist: {os.path.exists(pathold.phasepoints[0].particles.config[0])}")
-        print(f"monkey does the file exist: {os.path.exists(pathold.phasepoints[-1].particles.config[0])}")
+        #print(f"monkey the file {pathold.phasepoints[0].particles.config[0]}")
+        #print(f"monkey the file {pathold.phasepoints[-1].particles.config[0]}")
+        #print(f"monkey does the file exist: {os.path.exists(pathold.phasepoints[0].particles.config[0])}")
+        #print(f"monkey does the file exist: {os.path.exists(pathold.phasepoints[-1].particles.config[0])}")
 
         if not md_items['internal']:
             ensembles[ens_nums[0]+1]['engine'].clean_up()
@@ -137,15 +136,15 @@ def run_md(md_items):
                      'interfaces': interfaces,
                      'wmd_end': time.time()})
     logger.info(f"Worker {md_items['pin']} is done.")
-    logger.info(f"the file {trials[0].phasepoints[0].particles.config[0]}")
-    logger.info(f"the file {trials[0].phasepoints[-1].particles.config[0]}")
-    filename = trials[0].phasepoints[0].particles.config[0]
-    logger.info(f"does the file exist: {os.path.exists(trials[0].phasepoints[0].particles.config[0])}")
-    logger.info(f"does the file exist: {os.path.exists(trials[0].phasepoints[-1].particles.config[0])}")
-    p = subprocess.Popen(["ls", filename], stdout=subprocess.PIPE)
-    out, err = p.communicate()
-    logger.info(f"out: {out}")
-    logger.info(f"err: {err}")
+    #logger.info(f"the file {trials[0].phasepoints[0].particles.config[0]}")
+    #logger.info(f"the file {trials[0].phasepoints[-1].particles.config[0]}")
+    #filename = trials[0].phasepoints[0].particles.config[0]
+    #logger.info(f"does the file exist: {os.path.exists(trials[0].phasepoints[0].particles.config[0])}")
+    #logger.info(f"does the file exist: {os.path.exists(trials[0].phasepoints[-1].particles.config[0])}")
+    #p = subprocess.Popen(["ls", filename], stdout=subprocess.PIPE)
+    #out, err = p.communicate()
+    #logger.info(f"out: {out}")
+    #logger.info(f"err: {err}")
     return md_items
 
 def log_mdlogs(inp):
@@ -190,11 +189,16 @@ def treat_output(state, md_items):
                 logger.info(f"after i: {i}")
             out_traj.path_number = traj_num
             #print("zerba: ", out_traj.path_number)
-            traj_num_dic[traj_num] = {'frac': np.zeros(state.n, dtype="float128"),
-                                      'max_op': out_traj.ordermax,
-                                      'length': out_traj.length,
-                                      'traj_v': out_traj.traj_v,
-                                      'ens_save_idx': ens_save_idx}
+
+            traj_num_dic[traj_num] = \
+                {'frac': np.zeros(state.n, dtype="float128"),
+                 'ptype': get_ptype(out_traj, 
+                                     *ensembles[ens_num+1]['interfaces']),
+                 'max_op': out_traj.ordermax,
+                 'min_op': out_traj.ordermin,
+                 'length': out_traj.length,
+                 'traj_v': out_traj.traj_v,
+                 'ens_save_idx': ens_save_idx}
             if not md_items['internal']:
                 traj_num_dic[traj_num]['adress'] = set(os.path.basename(kk.particles.config[0]) for kk in out_traj.phasepoints)
             traj_num += 1
@@ -235,7 +239,7 @@ def treat_output(state, md_items):
     state.sort_trajstate()
     state.config['current']['traj_num'] = traj_num
     state.cworker = md_items['pin']
-    print("md_items: ", md_items)
+    #print("md_items: ", md_items)
     state.print_shooted(md_items, pn_news)
     # save for possible restart
     state.save_rng()
@@ -305,6 +309,9 @@ def setup_internal(input_file):
         frac = config['current']['frac'].get(str(pnum), np.zeros(size+1))
         traj_num_dic[pnum] = {'ens_save_idx': i + 1,
                               'max_op': path.ordermax,
+                              'min_op': path.ordermin,
+                              'ptype': get_ptype(path, 
+                                                 *sim.ensembles[i+1]['interfaces']),
                               'length': path.length,
                               'traj_v': path.traj_v,
                               'frac': np.array(frac, dtype='float128')}
@@ -319,6 +326,9 @@ def setup_internal(input_file):
     frac = config['current']['frac'].get(str(pnum), np.zeros(size+1))
     traj_num_dic[pnum]= {'ens_save_idx': 0,
                          'max_op': path.ordermax,
+                         'min_op': path.ordermin,
+                         'ptype': get_ptype(path,
+                                            *sim.ensembles[0]['interfaces']),
                          'length': path.length,
                          'traj_v': path.traj_v,
                          'frac': np.array(frac, dtype='float128')}
@@ -505,6 +515,8 @@ def write_to_pathens(state, pn_archive):
             string += f'\t{pn:3.0f}\t'
             string += f"{traj_num_dic[pn]['length']:5.0f}" + '\t'
             string += f"{traj_num_dic[pn]['max_op'][0]:8.5f}" + '\t'
+            string += f"{traj_num_dic[pn]['min_op'][0]:8.5f}" + '\t'
+            string += f"{traj_num_dic[pn]['ptype']}" + '\t'
             frac = []
             weight = []
             logger.info(f'traj_num_dic: {traj_num_dic[pn]}')
@@ -527,3 +539,8 @@ def write_to_pathens(state, pn_archive):
                     weight.append('----' if w0 == 0.0 else str(w0))
             fp.write(string + '\t'.join(frac) + '\t' + '\t'.join(weight) + '\t\n')
             traj_num_dic.pop(pn)
+
+def get_ptype(path, L, M, R):
+    end_cond = 'L' if path.phasepoints[-1].order[0] < L else 'R'
+    start_cond = 'R' if path.phasepoints[0].order[0] > R else 'L'
+    return start_cond + 'M' + end_cond

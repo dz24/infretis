@@ -51,8 +51,8 @@ def scheduler(input_file):
             logger.info("After picking")
             prep_pyretis(state, md_items, inp_traj, ens_nums)
             logger.info("After prep")
-            print("ZERBA")
-            print(md_items)
+            #print("ZERBA")
+            #print(md_items)
             # submit job
             fut = client.submit(run_md, md_items, pure=False)
             logger.info("After submit")
