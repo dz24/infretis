@@ -3,6 +3,7 @@ import numpy as np
 import time
 import tomli
 import logging
+import shlex
 from datetime import datetime
 from pyretis.inout.formats.formatter import get_log_formatter
 from pyretis.core.tis import select_shoot
@@ -91,7 +92,7 @@ def run_md(md_items):
         logger.info(f'Move finished with trial path lenght of {trial.length}')
         log_mdlogs(f'{ens_num+1:03}/generate/')
         if status == 'ACC':
-            trial.traj_v = calc_cv_vector(trial, ifaces, md_items['mc_moves'])
+            trial.traj_v = calc_cv_vector(trial, ifaces, md_items['mc_moves'], md_items['cap'])
             ensembles[ens_num+1]['path_ensemble'].last_path = trial
             logger.info('The move was accepted!')
         else:
@@ -239,12 +240,15 @@ def setup_internal(input_file):
     sim = setup_pyretis(config, sim_settings)
     state = setup_repex(config, sim)
 
+    # check if cap exists
+    cap = sim_settings['tis'].get('interface_cap', None)
+
     # initiate by adding paths from retis sim to repex
     traj_num_dic = state.traj_num_dic
     for i in range(size-1):
         # we add all the i+ paths.
         path = sim.ensembles[i+1]['path_ensemble'].last_path
-        path.traj_v = calc_cv_vector(path, interfaces, state.mc_moves)
+        path.traj_v = calc_cv_vector(path, interfaces, state.mc_moves, cap)
         state.add_traj(ens=i, traj=path, valid=path.traj_v, count=False)
         pnum = path.path_number
         frac = config['current']['frac'].get(str(pnum), np.zeros(size+1))
@@ -255,7 +259,7 @@ def setup_internal(input_file):
                               'frac': np.array(frac, dtype='float128')}
         if not config['simulation']['internal']:
             traj_num_dic[pnum]['adress'] = set(os.path.basename(kk.particles.config[0]) for kk in path.phasepoints)
-    
+
     # add minus path:
     path = sim.ensembles[0]['path_ensemble'].last_path
     pnum = path.path_number
@@ -275,7 +279,8 @@ def setup_internal(input_file):
     state.pyretis_settings = sim.settings
     md_items = {'mc_moves': state.mc_moves,
                 'ensembles': {}, 
-                'internal': config['simulation']['internal']}
+                'internal': config['simulation']['internal'],
+                'cap': cap}
 
     if state.pattern_file:
         writemode = 'a' if 'restarted_from' in state.config['current'] else 'w'
@@ -324,10 +329,11 @@ def prep_pyretis(state, md_items, inp_traj, ens_nums):
         # config['dask']['wmdrun'] a list of commands with len equal no works.
         if not md_items['internal'] and state.config['dask'].get('wmdrun', False):
             mdrun0 = state.config['dask']['wmdrun'][md_items['pin']]
-            mdrun = mdrun0 + ' -s {} -deffnm {} -c {}'
-            mdrun_c = mdrun0 + ' -s {} -cpi {} -append -deffnm {} -c {}'
-            md_items['ensembles'][ens_num+1]['engine'].mdrun = mdrun
-            md_items['ensembles'][ens_num+1]['engine'].mdrun_c = mdrun_c
+            md_items['ensembles'][ens_num+1]['engine'].cp2k = shlex.split(mdrun0)
+            # mdrun = mdrun0 + ' -s {} -deffnm {} -c {}'
+            # mdrun_c = mdrun0 + ' -s {} -cpi {} -append -deffnm {} -c {}'
+            # md_items['ensembles'][ens_num+1]['engine'].mdrun = mdrun
+            # md_items['ensembles'][ens_num+1]['engine'].mdrun_c = mdrun_c
 
     interfaces = state.pyretis_settings['simulation']['interfaces']
     if len(ens_nums) == 1:
@@ -349,7 +355,7 @@ def prep_pyretis(state, md_items, inp_traj, ens_nums):
         md_items[key] = []
     md_items.update({'ens_nums': ens_nums})
 
-def calc_cv_vector(path, interfaces, moves):
+def calc_cv_vector(path, interfaces, moves, cap=None):
     path_max, _ = path.ordermax
 
     cv = []
@@ -358,7 +364,8 @@ def calc_cv_vector(path, interfaces, moves):
 
     for idx, intf_i in enumerate(interfaces[:-1]):
         if moves[idx+1] == 'wf':
-            intfs = [interfaces[0], intf_i, interfaces[-1]]
+            intf_cap = interfaces[-1] if not cap else cap
+            intfs = [interfaces[0], intf_i, intf_cap]
             cv.append(compute_weight(path, intfs, moves[idx+1]))
         else:
             cv.append(1. if intf_i <= path_max else 0.)
