@@ -329,11 +329,11 @@ def prep_pyretis(state, md_items, inp_traj, ens_nums):
         # config['dask']['wmdrun'] a list of commands with len equal no works.
         if not md_items['internal'] and state.config['dask'].get('wmdrun', False):
             mdrun0 = state.config['dask']['wmdrun'][md_items['pin']]
-            md_items['ensembles'][ens_num+1]['engine'].cp2k = shlex.split(mdrun0)
-            # mdrun = mdrun0 + ' -s {} -deffnm {} -c {}'
-            # mdrun_c = mdrun0 + ' -s {} -cpi {} -append -deffnm {} -c {}'
-            # md_items['ensembles'][ens_num+1]['engine'].mdrun = mdrun
-            # md_items['ensembles'][ens_num+1]['engine'].mdrun_c = mdrun_c
+            # md_items['ensembles'][ens_num+1]['engine'].cp2k = shlex.split(mdrun0)
+            mdrun = mdrun0 + ' -s {} -deffnm {} -c {}'
+            mdrun_c = mdrun0 + ' -s {} -cpi {} -append -deffnm {} -c {}'
+            md_items['ensembles'][ens_num+1]['engine'].mdrun = mdrun
+            md_items['ensembles'][ens_num+1]['engine'].mdrun_c = mdrun_c
 
     interfaces = state.pyretis_settings['simulation']['interfaces']
     if len(ens_nums) == 1:
