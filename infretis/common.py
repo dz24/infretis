@@ -18,7 +18,8 @@ from dask.distributed import dask, Client, as_completed, get_worker
 from pyretis.core.common import compute_weight
 dask.config.set({'distributed.scheduler.work-stealing': False})
 logger = logging.getLogger('')
-logger.setLevel(logging.DEBUG)
+# logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 # Define a console logger. This will log to sys.stderr:
 console = logging.StreamHandler()
 console.setLevel(logging.WARNING)
@@ -177,16 +178,16 @@ def treat_output(state, md_items):
         #print("traj_out: ", dir(out_traj))
         if out_traj.path_number == None or md_items['status'] == 'ACC':
             # move to accept:
-            logger.info(f"pn_old: {pn_old}")
-            logger.info(f"traj_num_dic: {traj_num_dic}")
+            #logger.info(f"pn_old: {pn_old}")
+            #logger.info(f"traj_num_dic: {traj_num_dic}")
             ens_save_idx = traj_num_dic[pn_old]['ens_save_idx']
-            logger.info(f"Shark")
-            logger.info(f"ens_save_idx: {ens_save_idx}")
-            for i in out_traj.phasepoints:
-                logger.info(f"before i: {i}")
+            #logger.info(f"Shark")
+            #logger.info(f"ens_save_idx: {ens_save_idx}")
+            #for i in out_traj.phasepoints:
+            #    logger.info(f"before i: {i}")
             state.ensembles[ens_save_idx]['path_ensemble'].store_path(out_traj)
-            for i in out_traj.phasepoints:
-                logger.info(f"after i: {i}")
+            #for i in out_traj.phasepoints:
+            #    logger.info(f"after i: {i}")
             out_traj.path_number = traj_num
             #print("zerba: ", out_traj.path_number)
 
@@ -249,8 +250,10 @@ def setup_internal(input_file):
 
     # setup logger
     fileh = logging.FileHandler('sim.log', mode='a')
-    log_levl = getattr(logging, 'debug'.upper(),
-                       logging.DEBUG)
+    log_levl = getattr(logging, 'info'.upper(),
+                       logging.INFO)
+    # log_levl = getattr(logging, 'debug'.upper(),
+    #                    logging.DEBUG)
     fileh.setLevel(log_levl)
     fileh.setFormatter(get_log_formatter(log_levl))
     logger.addHandler(fileh)
@@ -496,8 +499,10 @@ def set_logger():
     pin = get_worker().name
     log = logging.getLogger()
     fileh = logging.FileHandler(f"worker{pin}.log", mode='a')
-    log_levl = getattr(logging, 'debug'.upper(),
-                       logging.DEBUG)
+    log_levl = getattr(logging, 'info'.upper(),
+                       logging.INFO)
+    # log_levl = getattr(logging, 'debug'.upper(),
+    #                    logging.DEBUG)
     fileh.setLevel(log_levl)
     fileh.setFormatter(get_log_formatter(log_levl))
     logger.addHandler(fileh)

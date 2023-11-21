@@ -128,6 +128,7 @@ class REPEX_state(object):
         self.locked0 = []
         self.locked = []
         self.pyretis_settings = None
+        #self.zeroswap = 0.5
         self.zeroswap = 0.5
         self.start_time = time.time()
         self.pstore = None
@@ -667,6 +668,7 @@ class REPEX_state(object):
         self.config['current']['frac'] = {}
         self.config['current']['weights'] = {}
         self.config['current']['max_op'] = {}
+        self.config['current']['min_op'] = {}
         self.config['current']['length'] = {}
         for key in sorted(self.traj_num_dic.keys()):
             fracs = [str(i) for i in self.traj_num_dic[key]['frac']]
@@ -674,6 +676,7 @@ class REPEX_state(object):
             self.config['current']['frac'][str(key)] = fracs
             self.config['current']['weights'][str(key)] = traj_v
             self.config['current']['max_op'][str(key)] = str(self.traj_num_dic[key]['max_op'][0])
+            self.config['current']['min_op'][str(key)] = str(self.traj_num_dic[key]['min_op'][0])
             self.config['current']['length'][str(key)] = str(self.traj_num_dic[key]['length'])
 
         with open("./restart.toml", "wb") as f:
@@ -749,6 +752,7 @@ class REPEX_state(object):
                 for prob in self._last_prob[idx][:-1]:
                     to_print += f'{prob:.2f}\t' if prob != 0 else '----\t'
                 to_print += f"{self.traj_num_dic[live]['max_op'][0]:8.5f} |"
+                to_print += f"{self.traj_num_dic[live]['min_op'][0]:8.5f} |"
                 to_print += f"{self.traj_num_dic[live]['length']:5.0f}"
                 logger.info(to_print)
             else:

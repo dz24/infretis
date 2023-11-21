@@ -6,6 +6,7 @@ import subprocess
 from pyretis.inout.formats.formatter import get_log_formatter
 
 logger = logging.getLogger('')
+logger.setLevel(logging.INFO)
 logger.setLevel(logging.DEBUG)
 # Define a console logger. This will log to sys.stderr:
 console = logging.StreamHandler()

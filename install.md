@@ -9,5 +9,6 @@ cd ..
 git clone  https://github.com/dz24/infretis.git
 cd infretis ; git checkout dz24/external
 pip install dask distributed tomli_w
+# If you want to run with mdanalysis, you'll need dask=2023.3.0 and distributed=2023.3.0
 python -m pip install -e .
 cd ..
