@@ -1,8 +1,9 @@
 """The functions to be used to run infretis via the terminal."""
 import argparse
+import asyncio
 
 from infretis.scheduler import scheduler
-from infretis.setup import setup_config
+from infretis.setup import setup_config, setup_internal
 
 
 def infretisrun():
@@ -17,7 +18,13 @@ def infretisrun():
     config = setup_config(input_file)
     if config is None:
         return
-    scheduler(config)
+
+    md_items, state = setup_internal(config)
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(scheduler(loop, md_items, state))
+    finally:
+        loop.close()
 
 
 def infretisinit():

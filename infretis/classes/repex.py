@@ -488,7 +488,7 @@ class REPEX_state:
 
         equal = equal_minus and equal_pos
 
-        out = np.zeros(shape=sorted_non_locked.shape, dtype="float128")
+        out = np.zeros(shape=sorted_non_locked.shape, dtype="float")
         if equal:
             # All trajectories have equal weights, run fast algorithm
             # run_fast
@@ -568,8 +568,8 @@ class REPEX_state:
 
     def quick_prob(self, arr):
         """Quick P matrix calculation for specific W matrix."""
-        total_traj_prob = np.ones(shape=arr.shape[0], dtype="float128")
-        out_mat = np.zeros(shape=arr.shape, dtype="float128")
+        total_traj_prob = np.ones(shape=arr.shape[0], dtype="float")
+        out_mat = np.zeros(shape=arr.shape, dtype="float")
         working_mat = np.where(arr != 0, 1, 0)  # convert non-zero numbers to 1
 
         for i, column in enumerate(working_mat.T[::-1]):
@@ -587,8 +587,8 @@ class REPEX_state:
         """Quick P matrix calculation for specific W matrix."""
         # TODO: DEBUG CODE
         # ONLY HERE TO DEBUG THE OTHER METHODS
-        total_traj_prob = np.ones(shape=arr.shape[0], dtype="float128")
-        out_mat = np.zeros(shape=arr.shape, dtype="float128")
+        total_traj_prob = np.ones(shape=arr.shape[0], dtype="float")
+        out_mat = np.zeros(shape=arr.shape, dtype="float")
 
         force_arr = arr.copy()
         # Force everything to be identical
@@ -606,7 +606,7 @@ class REPEX_state:
 
     def permanent_prob(self, arr):
         """P matrix calculation for specific W matrix."""
-        out = np.zeros(shape=arr.shape, dtype="float128")
+        out = np.zeros(shape=arr.shape, dtype="float")
         # Don't overwrite input arr
         scaled_arr = arr.copy()
         n = len(scaled_arr)
@@ -629,7 +629,7 @@ class REPEX_state:
 
     def random_prob(self, arr, n=10_000):
         """P matrix calculation for specific W matrix."""
-        out = np.eye(len(arr), dtype="float128")
+        out = np.eye(len(arr), dtype="float")
         current_state = np.eye(len(arr))
         choices = len(arr) // 2
         even = choices * 2 == len(arr)
@@ -689,7 +689,7 @@ class REPEX_state:
             else:
                 return -1
 
-        row_comb = np.sum(M, axis=0, dtype="float128")
+        row_comb = np.sum(M, axis=0, dtype="float")
         n = len(M)
 
         total = 0
@@ -874,15 +874,17 @@ class REPEX_state:
             )
             logger.info(f"{key:03.0f} * {values} *")
 
-    def treat_output(self, md_items):
+    def treat_output(self, md_items, picked):
         """Treat output."""
         pn_news = []
         md_items["md_end"] = time.time()
-        picked = md_items["picked"]
+        # picked = md_items["picked"]
         traj_num = self.config["current"]["traj_num"]
+        pn_olds = []
 
         for ens_num in picked.keys():
             pn_old = picked[ens_num]["pn_old"]
+            pn_olds.append(pn_old)
             out_traj = picked[ens_num]["traj"]
             self.ensembles[ens_num + 1] = picked[ens_num]["ens"]
 
@@ -892,6 +894,12 @@ class REPEX_state:
             # if path is new: number and save the path:
             if out_traj.path_number is None or md_items["status"] == "ACC":
                 # move to accept:
+                print(
+                    "mango b",
+                    pn_old in self.traj_data,
+                    pn_old,
+                    self.traj_data.keys(),
+                )
                 ens_save_idx = self.traj_data[pn_old]["ens_save_idx"]
                 out_traj.path_number = traj_num
                 data = {
@@ -902,7 +910,7 @@ class REPEX_state:
                 }
                 out_traj = self.pstore.output(self.cstep, data)
                 self.traj_data[traj_num] = {
-                    "frac": np.zeros(self.n, dtype="float128"),
+                    "frac": np.zeros(self.n, dtype="float"),
                     "max_op": out_traj.ordermax,
                     "min_op": out_traj.ordermin,
                     "length": out_traj.length,
@@ -942,6 +950,7 @@ class REPEX_state:
                         }
             pn_news.append(out_traj.path_number)
             self.add_traj(ens_num, out_traj, valid=out_traj.weights)
+        print("raddish a", self.traj_data.keys())
 
         # record weights
         locked_trajs = self.locked_paths()
@@ -953,7 +962,8 @@ class REPEX_state:
 
         # write succ data to infretis_data.txt
         if md_items["status"] == "ACC":
-            write_to_pathens(self, md_items["pnum_old"])
+            # write_to_pathens(self, md_items["pnum_old"])
+            write_to_pathens(self, pn_olds)
 
         self.sort_trajstate()
         self.config["current"]["traj_num"] = traj_num
@@ -962,6 +972,7 @@ class REPEX_state:
             self.print_shooted(md_items, pn_news)
         # save for possible restart
         self.write_toml()
+        print("raddish b", self.traj_data.keys())
 
         return md_items
 
@@ -993,7 +1004,7 @@ class REPEX_state:
                 "length": paths[i + 1].length,
                 "adress": paths[i + 1].adress,
                 "weights": paths[i + 1].weights,
-                "frac": np.array(frac, dtype="float128"),
+                "frac": np.array(frac, dtype="float"),
             }
         # add minus path:
         paths[0].weights = (1.0,)
@@ -1011,7 +1022,7 @@ class REPEX_state:
             "length": paths[0].length,
             "weights": paths[0].weights,
             "adress": paths[0].adress,
-            "frac": np.array(frac, dtype="float128"),
+            "frac": np.array(frac, dtype="float"),
         }
 
     def pattern_header(self):

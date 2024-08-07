@@ -65,7 +65,12 @@ def log_mdlogs(inp: str) -> None:
                     )
 
 
-def run_md(md_items: dict[str, Any]) -> dict[str, Any]:
+async def run_md0(md_items: dict[str, Any], picked):
+    # print(md_items)
+    return md_items, picked
+
+
+async def run_md(md_items: dict[str, Any], picked):
     """Execute shooting moves that require MD.
 
     Args:
@@ -82,16 +87,21 @@ def run_md(md_items: dict[str, Any]) -> dict[str, Any]:
     if len(ENGINES) == 0:
         def_globals(md_items["config"])
     # set mdrun, rng, clean_up
-    for ens_num in md_items["ens_nums"]:
-        pens = md_items["picked"][ens_num]
+    for ens_num in list(picked.keys()):
+        print("mango", picked, ens_num)
+        pens = picked[ens_num]
         engine = ENGINES[md_items["pin"]]
         engine.set_mdrun(pens)
         if "rgen-eng" in pens:
             engine.rgen = pens["rgen-eng"]
-        engine.clean_up()
+        print("gon a", ENGINES[0].exe_dir)
+        print("gon b", ENGINES[1].exe_dir)
+        print("hehe", engine.exe_dir, picked[ens_num]["exe_dir"], ens_num)
+        # engine.clean_up()
 
     # perform the hw move:
-    picked = md_items["picked"]
+    # picked = md_items["picked"]
+    print("baked", engine.exe_dir)
     _, trials, status = select_shoot(picked, engine)
 
     # Record data
@@ -113,7 +123,8 @@ def run_md(md_items: dict[str, Any]) -> dict[str, Any]:
             picked[ens_num]["traj"] = trial
 
     md_items.update({"status": status, "wmd_end": time.time()})
-    return md_items
+    # md_items["picked"] = picked
+    return md_items, picked
 
 
 def calc_cv_vector(
