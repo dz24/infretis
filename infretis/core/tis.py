@@ -247,7 +247,7 @@ def wirefence_weight_and_pick(
 
 def select_shoot(
     picked: dict[int, Any],
-    start_cond: tuple[str, ...] = ("L",),
+    start_cond: tuple[str, ...] = ("L", "R"),
 ) -> tuple[bool, list[InfPath], str]:
     """Select shooting move, select engines, and generate a new path.
 
@@ -452,8 +452,26 @@ def shoot(
         return False, trial_path, trial_path.status
 
     # Last check - Did we cross the middle interface?
+    print('boom', ens_set["must_cross_M"], interfaces, start_cond)
+    if ens_set["must_cross_M"]:  # not for [0-]
+
+        # detect if: minorder < middle interf <= maxorder
+        if not trial_path.check_interfaces(interfaces)[-1][1]:
+            trial_path.status = 'NCR'
+            return False, trial_path, trial_path.status
+
+        else:
+            # if we do cross middle interface
+            # path still has to come from left or right
+            # so we need cross[0] or cross[2] to be true
+            if not (trial_path.check_interfaces(interfaces)[-1][0] or
+                    trial_path.check_interfaces(interfaces)[-1][2]):
+                trial_path.status = 'NCR'
+                return False, trial_path, trial_path.status
+
+
+
     # Don't do this for paths that can start everywhere
-    start_cond = ens_set.get("start_cond", start_cond)
     if set(("R", "L")) == set(start_cond):
         pass
     elif not trial_path.check_interfaces(interfaces)[-1][1]:

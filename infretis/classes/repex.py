@@ -78,10 +78,15 @@ class REPEX_state:
     @property
     def prob(self):
         """Calculate the P matrix."""
-        if self._last_prob is None:
-            prob = self.inf_retis(abs(self.state), self._locks)
-            self._last_prob = prob.copy()
-        return self._last_prob
+        # def prob(self):
+        prop = np.identity(self.n)
+        prop[-1,-1] = 0.
+        self._last_prob = prop.copy()
+        return prop*(1-np.array(self._locks))
+        # if self._last_prob is None:
+        #     prob = self.inf_retis(abs(self.state), self._locks)
+        #     self._last_prob = prob.copy()
+        # return self._last_prob
 
     @property
     def cstep(self):
@@ -304,12 +309,8 @@ class REPEX_state:
 
     def add_traj(self, ens, traj, valid, count=True, n=0):
         """Add traj to state and calculate P matrix."""
-        if ens >= 0 and self._offset != 0:
-            valid = tuple([0 for _ in range(self._offset)] + list(valid))
-        elif ens < 0:
-            valid = tuple(
-                list(valid) + [0 for _ in range(self.n - self._offset)]
-            )
+        valid = np.zeros(self.n)
+        valid[ens+1] = 1.
         ens += self._offset
         assert valid[ens] != 0
         # invalidate last prob
@@ -500,8 +501,13 @@ class REPEX_state:
 
         equal = equal_minus and equal_pos
 
+        print('soap a')
+        print(sorted_non_locked)
+        print('soap b')
         out = np.zeros(shape=sorted_non_locked.shape, dtype="longdouble")
+        print('equal', equal_minus, equal_pos)
         if equal:
+            print('pi a')
             # All trajectories have equal weights, run fast algorithm
             # run_fast
             # minus move should be run backwards
@@ -512,6 +518,7 @@ class REPEX_state:
                 # Catch only minus ens available
                 out[offset:] = self.quick_prob(sorted_non_locked[offset:])
         else:
+            print('pi b')
             # TODO DEBUG print
             # print("DEBUG this should not happen outside of wirefencing")
             blocks = self.find_blocks(sorted_non_locked, offset=offset)
@@ -548,6 +555,7 @@ class REPEX_state:
         out[sort_idx] = out.copy()  # COPY REQUIRED TO NOT BRAKE STATE!!!
 
         # Make sure we have a valid probability square
+        print('gori', out, locks)
         assert np.allclose(np.sum(out, axis=1), 1)
         assert np.allclose(np.sum(out, axis=0), 1)
 
@@ -900,6 +908,8 @@ class REPEX_state:
                     "weights": out_traj.weights,
                     "adress": out_traj.adress,
                     "ens_save_idx": ens_save_idx,
+                    "ptype": get_ptype(out_traj,
+                                       *self.ensembles[ens_num + 1]['interfaces'])
                 }
                 traj_num += 1
                 if (
@@ -961,6 +971,9 @@ class REPEX_state:
         size = self.n - 1
         # we add all the i+ paths.
         for i in range(size - 1):
+            # valid = np.zeros(self.n)
+            # valid[i] = 1.
+            # paths[i + 1].weights = valid
             paths[i + 1].weights = calc_cv_vector(
                 paths[i + 1],
                 self.config["simulation"]["interfaces"],
@@ -985,6 +998,8 @@ class REPEX_state:
                 "adress": paths[i + 1].adress,
                 "weights": paths[i + 1].weights,
                 "frac": np.array(frac, dtype="longdouble"),
+                "ptype": get_ptype(paths[i + 1],
+                                   *self.ensembles[i + 1]['interfaces'])
             }
         # add minus path:
         paths[0].weights = (1.0,)
@@ -1003,6 +1018,8 @@ class REPEX_state:
             "weights": paths[0].weights,
             "adress": paths[0].adress,
             "frac": np.array(frac, dtype="longdouble"),
+            "ptype": get_ptype(paths[0],
+                               *self.ensembles[0]['interfaces'])
         }
 
     def pattern_header(self):
@@ -1024,13 +1041,13 @@ class REPEX_state:
 
         # set intfs for [0-] and [0+]
         ens_intfs.append([float("-inf"), intfs[0], intfs[0]])
-        ens_intfs.append([intfs[0], intfs[0], intfs[-1]])
+        ens_intfs.append([intfs[0], intfs[0], intfs[1]])
 
         # set interfaces and set detect for [1+], [2+], ...
-        reactant, product = intfs[0], intfs[-1]
+        # reactant, product = intfs[0], intfs[-1]
         for i in range(len(intfs) - 2):
             middle = intfs[i + 1]
-            ens_intfs.append([reactant, middle, product])
+            ens_intfs.append([intfs[i], intfs[i + 1], intfs[i + 2]])
 
         # create all path ensembles
         pensembles = {}
@@ -1040,8 +1057,10 @@ class REPEX_state:
                 "tis_set": self.config["simulation"]["tis_set"],
                 "mc_move": self.config["simulation"]["shooting_moves"][i],
                 "ens_name": f"{i:03d}",
-                "start_cond": "R" if i == 0 else "L",
+                "must_cross_M": True if i > 0 else False,
+                "start_cond": "R" if i == 0 else ["L", "R"],
             }
+            print("ens", ens_intf, pensembles[i]["must_cross_M"])
 
         self.ensembles = pensembles
 
@@ -1057,6 +1076,8 @@ def write_to_pathens(state, pn_archive):
             string += f"\t{pn:3.0f}\t"
             string += f"{traj_data[pn]['length']:5.0f}" + "\t"
             string += f"{traj_data[pn]['max_op'][0]:8.5f}" + "\t"
+            string += f"{traj_data[pn]['min_op'][0]:8.5f}" + '\t'
+            string += f"{traj_data[pn]['ptype']}" + '\t'
             frac = []
             weight = []
             if len(traj_data[pn]["weights"]) == 1:
@@ -1081,3 +1102,9 @@ def write_to_pathens(state, pn_archive):
                 string + "\t".join(frac) + "\t" + "\t".join(weight) + "\t\n"
             )
             traj_data.pop(pn)
+
+
+def get_ptype(path, L, M, R):
+    end_cond = 'L' if path.phasepoints[-1].order[0] < L else 'R'
+    start_cond = 'R' if path.phasepoints[0].order[0] > R else 'L'
+    return start_cond + 'M' + end_cond

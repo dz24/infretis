@@ -418,6 +418,8 @@ def load_path(pdir: str) -> Path:
     """Load a path from the given directory."""
     trajtxt = os.path.join(pdir, "traj.txt")
     ordertxt = os.path.join(pdir, "order.txt")
+    print('tri', trajtxt)
+    print('tri', ordertxt)
     assert os.path.isfile(trajtxt)
     assert os.path.isfile(ordertxt)
 
