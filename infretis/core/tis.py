@@ -276,7 +276,8 @@ def select_shoot(
     # set engine, might also depend on chosen move
     engines = {}
     msg = "Selected engines "
-    for ens_num in picked.keys():
+    ens_nums = picked.keys()
+    for ens_num in ens_nums:
         pens = picked[ens_num]
         if len(picked) == 2:
             engines[ens_num] = [
@@ -311,10 +312,15 @@ def select_shoot(
         )
         new_paths = [new_path]
     else:
-        if picked[-1]["ens"]["tis_set"]["quantis"]:
-            accept, new_paths, status = quantis_swap_zero(picked, engines)
+        if -1 in ens_nums:
+            if picked[-1]["ens"]["tis_set"]["quantis"]:
+                accept, new_paths, status = quantis_swap_zero(picked, engines)
+            else:
+                accept, new_paths, status = retis_swap_zero(picked, engines)
         else:
-            accept, new_paths, status = retis_swap_zero(picked, engines)
+            # logger.info(f"Shooting sh sh in ensembles: {ens_nums[0]} <-> {ens_nums[1]}"\
+            #             f" with paths: {pnums} and worker: {md_items['pin']}")
+            accept, new_paths, status = ppretis_swap(picked, engines)
 
     logger.info(f"Move was {accept} with status {status}\n")
     return accept, new_paths, status
@@ -1329,3 +1335,354 @@ def quantis_swap_zero(
     new_path1.weight = 1.0
 
     return True, [new_path0, new_path1], "ACC"
+
+def ppretis_swap(
+    picked: dict[int, Any],
+    engines: dict[int, list[EngineBase]],
+) -> tuple[bool, list[InfPath], str]:
+
+    """Perform the RETIS swap between ``[i^+] <-> [(i+1)^+]`` PPTIS ensembles.
+
+    First, it is verified if we can attempt a swap:
+    the [i^+] path should start/end on the right of lambda_(i+1)
+    AND the [(i+1)^+] path should start/end on the left of lambda_i
+
+    This is labeled as follows:
+    - allowed1: [i^+] path starts on the right of lambda_(i+1)
+    - allowed2: [i^+] path ends   on the right of lambda_(i+1)
+    - allowed3: [(i+1)^+] path starts on the left of lambda_i
+    - allowed4: [(i+1)^+] path ends   on the left of lambda_i
+
+    For now, only the case [allowed2 and allowed3] are considered for a swap,
+    because this is easier to obey detailed balance.
+
+    The RETIS swapping move for ensembles [i^+] and [(i+1)^+] requires some
+    extra integration. Here we are generating new paths for [i^+] and
+    [(i+1)^+] similarly to the moves done in the retis_swap_zero function.
+
+    Parameters
+    ----------
+    ensembles : list of dictionaries of objects
+        This is a list of the ensembles we are using in the RETIS method.
+        It contains:
+
+        * `path_ensemble`: object like :py:class:`.PathEnsemble`
+          This is used for storing results for the simulation. It
+          is also used for defining the interfaces for this simulation.
+        * `system`: object like :py:class:`.System`
+          System is used here since we need access to the temperature
+          and to the particle list.
+        * `order_function`: object like :py:class:`.OrderParameter`
+          The class used for calculating the order parameter(s).
+        * `engine`: object like :py:class:`.EngineBase`
+          The engine to use for propagating a path.
+
+    idx : int
+        The index of the ensemble that will be swapped.
+    settings : dict
+        This dict contains the settings for the RETIS method.
+    cycle : integer
+        The current cycle number.
+
+    Returns
+    -------
+    out : string
+        The result of the swapping move.
+
+    """
+    ens_keys = list(picked.keys())
+    ens_set0 = picked[ens_keys[0]]["ens"]
+    ens_set1 = picked[ens_keys[1]]["ens"]
+    engine0 = engines[ens_keys[0]][0]
+    engine1 = engines[ens_keys[1]][0]
+    old_path0 = picked[ens_keys[0]]["traj"]
+    old_path1 = picked[ens_keys[1]]["traj"]
+    maxlen0 = ens_set0["tis_set"]["maxlength"]
+    maxlen1 = ens_set1["tis_set"]["maxlength"]
+    lambda0 = ens_set0["interfaces"][-1]
+
+    logger.info("Swapping: %s <-> %s",
+                ens_set0["ens_name"],
+                ens_set1["ens_name"])
+
+    # WOUTER: This assumes that we have a [0-] and [0+] ensemble? If the
+    #         zero_ensemble and flux ensemble are not present, this will
+    #         fail. (Lacking any of them would result in nonsense?)
+    # if idx == 0:
+    #     return retis_swap_zero(ensembles, settings, cycle)
+
+    # path_ensemble0 = ensembles[idx]['path_ensemble']
+    # path_ensemble1 = ensembles[idx+1]['path_ensemble']
+    # engine0, engine1 = ensembles[idx]['engine'], ensembles[idx+1]['engine']
+    # maxlen0 = settings['ensemble'][idx]['tis']['maxlength']
+    # maxlen1 = settings['ensemble'][idx+1]['tis']['maxlength']
+
+    # 0. check if MD is allowed
+    # ----------------------------
+    # The first or last point of [i^+] should be
+    # at the right (R) of the right border (interfaces[-1]) of the [i+] range.
+    # So the path should start and/or end at the right.
+    # path1 = backward, phasepoint[0], phasepoint[1], ...
+    allowed1 = (old_path0.get_start_point(ens_set0["interfaces"][-1]) == 'R')
+    # path1 = ..., phasepoint[-2], phasepoint[-1], forward
+    allowed2 = (old_path0.get_end_point(ens_set0["interfaces"][-1]) == 'R')
+
+    # The first or last point of [(i+1)^+] should be at the left (L) of
+    # the left border (interfaces[0]) of the [(i+1)] range
+    # So the path should start and/or end at the left
+    # path0 = backward, phasepoint[0], phasepoint[1], ...
+    allowed3 = (old_path1.get_start_point(ens_set1["interfaces"][0]) == 'L')
+    # path0 = phasepoint[-2], phasepoint[-1], forward
+    allowed4 = (old_path1.get_end_point(ens_set1["interfaces"][0]) == 'L')
+
+    # Double check: this should be automatically true:
+    # overlap in range with the other ensemble
+    if allowed1:
+        assert (old_path0.get_start_point(ens_set1["interfaces"][0]) == 'R')
+    if allowed2:
+        assert (old_path0.get_end_point(ens_set1["interfaces"][0]) == 'R')
+    if allowed3:
+        assert (old_path1.get_start_point(ens_set0["interfaces"][-1]) == 'L')
+    if allowed4:
+        assert (old_path1.get_end_point(ens_set0["interfaces"][-1]) == 'L')
+
+    # we will only do allowed2 and allowed3, because of detailed balance
+    allowed1 = False    # overwrite
+    allowed4 = False
+    # allowed = (allowed2 and allowed3)
+    allowed = ((allowed1 or allowed2) and (allowed3 or allowed4))
+
+    # deal with it when we are sure that we cannot swap
+    if not allowed:
+        status = 'NCR'
+        accept = False
+        logger.info('Swap was rejected. (%s)', status)
+
+        # Make shallow copies:
+        trial0 = old_path1.copy() # copy.copy(path_ensemble1.last_path)
+        trial1 = old_path0.copy() # copy.copy(path_ensemble0.last_path)
+        # trial0.set_move('s+')  # Came from left.
+        # trial1.set_move('s-')  # Came from right.
+        trial0.weight = 1.0
+        trial1.weight = 1.0
+        # path_ensemble0.add_path_data(trial0, status, cycle=cycle)
+        # path_ensemble1.add_path_data(trial1, status, cycle=cycle)
+        return accept, [trial0, trial1], status
+
+    # 1. Generate path for [i^+] from [(i+1)^+]:
+    # --------------------------------------------
+    # We generate from the first point of the path in [(i+1)^+]:
+    logger.debug('Swapping [i^+] <-> [(i+1)^+]')
+    logger.debug('Creating path for [i^+]')
+
+    # Start with copying parts of the path
+    # reserve one spot for the "R" point, hence maxlen0-1
+    # path_tmp0 = path_ensemble1.last_path.empty_path(maxlen=maxlen0-1)
+    path_tmp0 = old_path1.empty_path(maxlen=maxlen0-1)
+
+    if allowed3:
+        trial = old_path1.phasepoints[1:]
+    elif allowed4:
+        trial = reversed(old_path1.phasepoints[:-1])
+
+    # Adding more points from [(i+1)^+] at the end:
+    # I will already have point[0]
+    logger.debug('Copying points from [(i+1)^+]:')
+
+    for phase_point in trial:
+        # Here we make a copy of the phase point, as we will update
+        # the configuration and append it to the new path:
+        logger.debug('Point is %s', phase_point)
+        # save for external engine
+        path_tmp0.append(phase_point.copy())
+        if phase_point.order[0] >= ens_set0["interfaces"][-1]:
+            break  # stop adding phase points
+
+    # The new path should have crossed the right interface, which we had
+    # verified with allowed3 and allowed4
+    # print("path_tmp0.phasepoints[-1].order[0]",path_tmp0.phasepoints[-1].order[0])
+    # print("path_ensemble0.interfaces[-1]", path_ensemble0.interfaces[-1])
+    # TODO
+    # assert\
+    # path_tmp0.phasepoints[-1].order[0] >= path_ensemble0.interfaces[-1],\
+    #     "New path did not cross left interface. This shouldn't happen?!"
+    # I had this
+    # if allowed3:
+    #    assert (path_ensemble1.last_path.get_start_point(
+    #        path_ensemble0.interfaces[-1]) == 'L')
+    # if allowed4:
+    #    assert (path_ensemble1.last_path.get_end_point(
+    #        path_ensemble0.interfaces[-1]) == 'L')
+    #
+    # Now, we will construct the rest of the path by propagation
+
+    # Select phase point
+    if allowed3:    # first phase point is L
+        system = old_path1.phasepoints[0].copy()
+    elif allowed4:    # last phase point is L
+        system = old_path1.phasepoints[-1].copy()
+
+    logger.debug('Initial point is: %s', system)
+    #ensembles[idx]['system'] = system
+
+    # Propagate it backward / forward in time:
+    thislen = maxlen0 - path_tmp0.length - 1    # a bit shorter
+    path_tmp = old_path1.empty_path(maxlen=thislen)
+    logger.debug('Propagating for [i^+]')
+
+    if allowed3:
+        engine0.propagate(path_tmp, ens_set0, system, reverse=True)
+    elif allowed4:
+        engine0.propagate(path_tmp, ens_set0, system, reverse=False)
+
+    # Finally, patch together
+    if allowed3:
+        path0 = paste_paths(path_tmp, path_tmp0,
+                            overlap=False, maxlen=maxlen0)
+    elif allowed4:
+        path0 = paste_paths(path_tmp0, path_tmp,
+                            overlap=False, maxlen=maxlen0)
+
+    # acceptance
+    path0.status = 'ACC'
+    if allowed3:
+        if path0.length >= maxlen0:
+            path0.status = 'BTX'
+        elif path0.length < 3:
+            path0.status = 'BTS'
+
+    elif allowed4:
+        if path0.length >= maxlen0:
+            path0.status = 'FTX'
+        elif path0.length < 3:
+            path0.status = 'FTS'
+
+    assert not ('L' not in set(ens_set0["start_cond"]) and
+                'L' in path0.check_interfaces(ens_set0["interfaces"])[:2]),\
+        "Start condition L is not in path_ensemble0, while path0 crosses L.\
+        This is not possible for PPRETIS?!"
+
+    # 2. Generate path for [(i+1)^+] from [i^+]:
+    # --------------------------------------------
+    logger.debug('Creating path for [(i+1)^+] from [i^+]')
+
+    # Start with copying parts of the path
+    # reserve one spot for the "L" point, hence maxle10-1
+    path_tmp0 = old_path1.empty_path(maxlen=maxlen1 - 1)
+
+    if allowed1:
+        trial = old_path0.phasepoints[1:]
+    elif allowed2:
+        trial = reversed(old_path0.phasepoints[:-1])
+
+    # Adding more points from [i^+]:
+    # I will already have point[0]
+    logger.debug('Copying points from [i^+]:')
+    for phase_point in trial:
+        # Here we make a copy of the phase point, as we will update
+        # the configuration and append it to the new path:
+        logger.debug('Point is %s', phase_point)
+        path_tmp0.append(phase_point.copy())
+        if phase_point.order[0] <= ens_set1["interfaces"][0]:
+            break  # stop adding phase points
+
+    # The new path should have crossed the left interface, which we had
+    # verified with allowed1 and allowed2
+    # TODO
+    # assert path_tmp0.phasepoints[-1].order[0]
+    # < path_ensemble0.interfaces[0], \
+    #    "New path did not cross left interface. This shouldn't happen?!"
+
+    # Now, we will construct the rest of the path by propagation
+
+    # select phase point
+    if allowed1:    # first phase point is R
+        system = old_path0.phasepoints[0].copy()
+    elif allowed2:    # last phase point is R
+        system = old_path0.phasepoints[-1].copy()
+
+    logger.debug('Initial point is: %s', system)
+    # ens_set1['system'] = system
+
+    # Propagate it backward / forward in time:
+    thelen = maxlen1 - 1 - path_tmp0.length
+    path_tmp = old_path1.empty_path(maxlen=thelen)
+
+    if allowed1:
+        logger.debug('Propagating for [(i+1)^+]')
+        engine1.propagate(path_tmp, ens_set1, system, reverse=True)
+    elif allowed2:
+        logger.debug('Propagating for [(i+1)^+]')
+        engine1.propagate(path_tmp, ens_set1, system, reverse=False)
+
+    for name0, pat000 in (('a', path0), ('b', path1)):
+        print('cheeze a') 
+        for pp in pat000.phasepoints:
+            print('wheel', name0, pp.config)
+        print('cheeze b') 
+    patch together
+    if allowed1:
+        path1 = paste_paths(path_tmp, path_tmp0,
+                            overlap=False, maxlen=maxlen1)
+    elif allowed2:
+        path1 = paste_paths(path_tmp0, path_tmp,
+                            overlap=False, maxlen=maxlen1)
+
+    # acceptance
+    path1.status = 'ACC'
+    if allowed1:
+        if path1.length >= maxlen1:
+            path1.status = 'BTX'
+        elif path1.length < 3:
+            path1.status = 'BTS'
+    elif allowed2:
+        if path1.length >= maxlen1:
+            path1.status = 'FTX'
+        elif path1.length < 3:
+            path1.status = 'FTS'
+
+    logger.debug('Done with swap zero!')
+    # 3. Do the bookkeeping
+    # -----------------------
+
+    # Final checks:
+    # accept = path0.status == 'ACC' and path1.status == 'ACC'
+    # status = 'ACC' if accept else (path0.status if path0.status != 'ACC' else
+    #                               path1.status)
+    accept = path0.status == 'ACC' and path1.status == 'ACC'
+    status = 'ACC'
+    if path0.status != 'ACC':
+        status = path0.status
+    if path1.status != 'ACC':
+        status = path1.status
+
+    # for trial, flag in ((path1, 's-'), (path0, 's+')):
+    #     trial.status = status
+    #     trial.weight = 1  # NB: No high acceptace allowed for ppretis.
+        # trial.set_move(flag)
+        # label the move as ld path, if it was ld in the previous cycle.
+        # if path_ensemble.last_path.get_move() == 'ld':
+        #     trial.set_move('ld')
+
+    # if accept:
+        # path0 = path_ensemble1.copy_path_to_generate(path0)
+        # path1 = path_ensemble0.copy_path_to_generate(path1)
+        # logger.debug("path0: "+str(path0)) RETURNS NULL
+        # logger.debug("path1: "+str(path1)) RETURNS NULL
+        # path_ensemble1.move_path_to_generate(path0)
+        # path_ensemble0.move_path_to_generate(path1)
+    # Split the loop to update objects first
+    # for i, trial, path_ensemble in ((0, path0, path_ensemble0),   # s+
+    #                                 (1, path1, path_ensemble1)):  # s-
+    #     path_ensemble.add_path_data(trial, status, cycle=cycle)
+    #     ens_set = settings['ensemble'][idx + i]
+    #     if cycle % ens_set.get('output', {}).get('restart-file', 1) == 0:
+    #         write_ensemble_restart(ensembles[idx+i], ens_set)
+
+    for name0, pat000 in (('a', path0), ('b', path1)):
+        print('cheeze a') 
+        for pp in pat000.phasepoints:
+            print('wheel', name0, pp.config)
+        print('cheeze b') 
+
+    return accept, (path0, path1), status

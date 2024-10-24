@@ -161,22 +161,42 @@ class REPEX_state:
         ens_nums = (ens - self._offset,)
         inp_trajs = (traj,)
 
-        if (
-            (ens == self._offset and not self._locks[self._offset - 1])
-            or (ens == self._offset - 1 and not self._locks[self._offset])
-        ) and self.rgen.random() < self.zeroswap:
-            if ens == self._offset:
-                # ens = 0
-                other = self._offset - 1
-                other_traj = self.pick_traj_ens(other)
-                ens_nums = (-1, 0)
-                inp_trajs = (other_traj, traj)
-            else:
-                # ens = -1
-                other = self._offset
-                other_traj = self.pick_traj_ens(other)
-                ens_nums = (-1, 0)
-                inp_trajs = (traj, other_traj)
+        # 1) Pick ensemble number
+        # 2) Take random number. If >: shoot. If <: swap.
+        # 2b) swap: choose neighbour (left or right, 50%). --> CHeck if locked
+        # The idea is written bleow, but should be adapted for _offset and
+        # ghost ensemble.
+        if np.random.random() < self.zeroswap:
+            if ens == 0:  # swap_zero if we choose [0-]
+                neighb = ens + 1
+            elif ens == self.n - 2:  # last ensemble, only swap left
+                neighb = ens - 1
+            elif ens < self.n - 2 :
+                neighb = ens + np.random.choice([-1,1])
+            if self._locks[neighb] == 0:
+                # if neighbour is not locked, do sth
+                other_traj = self.pick_traj_ens(neighb)
+                sorted_idx = np.argsort([neighb, ens])
+                ens_nums = tuple(np.array([neighb, ens])[sorted_idx]-1)
+                logger.info("Swapping %s and %s" % (neighb, ens))
+                inp_trajs = tuple(np.array([other_traj, traj])[sorted_idx])
+
+        # if (
+        #     (ens == self._offset and not self._locks[self._offset - 1])
+        #     or (ens == self._offset - 1 and not self._locks[self._offset])
+        # ) and self.rgen.random() < self.zeroswap:
+        #     if ens == self._offset:
+        #         # ens = 0
+        #         other = self._offset - 1
+        #         other_traj = self.pick_traj_ens(other)
+        #         ens_nums = (-1, 0)
+        #         inp_trajs = (other_traj, traj)
+        #     else:
+        #         # ens = -1
+        #         other = self._offset
+        #         other_traj = self.pick_traj_ens(other)
+        #         ens_nums = (-1, 0)
+        #         inp_trajs = (traj, other_traj)
 
         # lock and print the picked traj and ens
         pat_nums = [str(i.path_number) for i in inp_trajs]
