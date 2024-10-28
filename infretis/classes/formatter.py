@@ -904,7 +904,8 @@ class PathStorage(OutputBase):
                         logger.debug("Removing %s as it exists", dest)
                         os.remove(dest)
                 logger.debug("Copy %s -> %s", src, dest)
-                shutil.move(src, dest)
+                # shutil.move(src, dest)
+                shutil.copy(src, dest)
         return path_copy
 
     def output(self, step: int, data: Any) -> InfPath:

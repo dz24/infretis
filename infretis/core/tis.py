@@ -458,7 +458,7 @@ def shoot(
         return False, trial_path, trial_path.status
 
     # Last check - Did we cross the middle interface?
-    print('boom', ens_set["must_cross_M"], interfaces, start_cond)
+    # print('boom', ens_set["must_cross_M"], interfaces, start_cond)
     if ens_set["must_cross_M"]:  # not for [0-]
 
         # detect if: minorder < middle interf <= maxorder
@@ -1405,6 +1405,8 @@ def ppretis_swap(
                 ens_set0["ens_name"],
                 ens_set1["ens_name"])
 
+
+    # print('move pp start', old_path0.path_number, old_path1.path_number)
     # WOUTER: This assumes that we have a [0-] and [0+] ensemble? If the
     #         zero_ensemble and flux ensemble are not present, this will
     #         fail. (Lacking any of them would result in nonsense?)
@@ -1615,12 +1617,7 @@ def ppretis_swap(
         logger.debug('Propagating for [(i+1)^+]')
         engine1.propagate(path_tmp, ens_set1, system, reverse=False)
 
-    for name0, pat000 in (('a', path0), ('b', path1)):
-        print('cheeze a') 
-        for pp in pat000.phasepoints:
-            print('wheel', name0, pp.config)
-        print('cheeze b') 
-    patch together
+    # patch together
     if allowed1:
         path1 = paste_paths(path_tmp, path_tmp0,
                             overlap=False, maxlen=maxlen1)
@@ -1679,10 +1676,18 @@ def ppretis_swap(
     #     if cycle % ens_set.get('output', {}).get('restart-file', 1) == 0:
     #         write_ensemble_restart(ensembles[idx+i], ens_set)
 
-    for name0, pat000 in (('a', path0), ('b', path1)):
-        print('cheeze a') 
-        for pp in pat000.phasepoints:
-            print('wheel', name0, pp.config)
-        print('cheeze b') 
+    # for name0, pat000 in (('a', path0), ('b', path1)):
+    #     print('cheeze a', accept)
+    #     configs = []
+    #     for pp in pat000.phasepoints:
+    #         configs.append(pp.config[0])
+    #     print('cheeze b', set(configs))
+
+
+    # for name0, pat000 in (('a', path0), ('b', path1)):
+    #     print('cheeze a') 
+    #     for pp in pat000.phasepoints:
+    #         print('wheel', name0, pp.config)
+    #     print('cheeze b') 
 
     return accept, (path0, path1), status
