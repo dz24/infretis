@@ -300,6 +300,7 @@ def select_shoot(
 
     if len(picked) == 1:
         pens = next(iter(picked.values()))
+
         ens_set, path = (pens[i] for i in ["ens", "traj"])
         move = ens_set["mc_move"]
         logger.info(
@@ -458,7 +459,6 @@ def shoot(
         return False, trial_path, trial_path.status
 
     # Last check - Did we cross the middle interface?
-    # print('boom', ens_set["must_cross_M"], interfaces, start_cond)
     if ens_set["must_cross_M"]:  # not for [0-]
 
         # detect if: minorder < middle interf <= maxorder
@@ -892,6 +892,25 @@ def retis_swap_zero(
         )
         == "R"
     )
+    # if 0+ path starts from R, allowed2 false. This can occur for pp
+    allowed2 = (
+        path_old1.get_start_point(
+            ens_set1["interfaces"][0], ens_set1["interfaces"][-1]
+        )
+        == "L"
+    )
+    # deal with it when we are sure that we cannot swap
+    if not allowed2:
+        # print('w', path_old1.path_number, ens_set1["interfaces"][0], ens_set1["interfaces"][-1])
+        # exit()
+        status = 'NCR'
+        accept = False
+        logger.info('Swap was rejected. (%s)', status)
+        trial0 = path_old0.copy() # copy.copy(path_ensemble1.last_path)
+        trial1 = path_old1.copy() # copy.copy(path_ensemble0.last_path)
+        trial0.weight = 1.0
+        trial1.weight = 1.0
+        return accept, [trial0, trial1], status
     # if allowed:
     #     swap_ensemble_attributes(ensemble0, ensemble1, settings)
 
