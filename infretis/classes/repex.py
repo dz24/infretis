@@ -166,13 +166,13 @@ class REPEX_state:
         # 2b) swap: choose neighbour (left or right, 50%). --> CHeck if locked
         # The idea is written bleow, but should be adapted for _offset and
         # ghost ensemble.
-        if np.random.random() < self.zeroswap:
+        if self.rgen.random() < self.zeroswap:
             if ens == 0:  # swap_zero if we choose [0-]
                 neighb = ens + 1
             elif ens == self.n - 2:  # last ensemble, only swap left
                 neighb = ens - 1
             elif ens < self.n - 2 :
-                neighb = ens + np.random.choice([-1,1])
+                neighb = ens + self.rgen.choice([-1,1])
             if self._locks[neighb] == 0:
                 # if neighbour is not locked, do sth
                 other_traj = self.pick_traj_ens(neighb)
