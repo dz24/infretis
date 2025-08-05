@@ -824,9 +824,13 @@ class CP2KEngine(EngineBase):
         # Add CP2K input for N steps:
         run_input = os.path.join(self.exe_dir, "run.inp")
 
-        # get ensemble from msg_file of format "msg-ens_.."
+        # Get ensemble from msg_file of format "msg-ens_.."
         ens = os.path.basename(msg_file.filename)[4:7]
         restart_wfn = os.path.join(self.input_path, ens + ".wfn")
+
+        # CP2K crashes when wfn exists but is empty:
+        if os.path.exists(restart_wfn) and os.path.getsize(fpath) == 0:
+            restart_wfn = os.path.join(self.input_path, "doesnotexist.wfn")
 
         write_for_run_vel(
             self.input_files["template"],
@@ -839,6 +843,7 @@ class CP2KEngine(EngineBase):
             name=name,
             restart_wfn=restart_wfn,
         )
+
         # Get the order parameter before the run:
         order = self.calculate_order(system, xyz=xyz, vel=vel, box=box)
         traj_file = os.path.join(self.exe_dir, f"{name}.{self.ext}")

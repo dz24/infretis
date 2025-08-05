@@ -59,10 +59,6 @@ def setup_internal(config: dict) -> Tuple[dict, REPEX_state]:
     engine_occ = def_globals(config)
     state.engine_occ = engine_occ
 
-    # write pattern header
-    if state.pattern:
-        state.pattern_header()
-
     return md_items, state
 
 
@@ -154,10 +150,6 @@ def setup_config(
         # write/overwrite infretis_data.txt
         write_header(config)
 
-        # set pattern
-        if config["output"].get("pattern", False):
-            config["output"]["pattern_file"] = os.path.join("pattern.txt")
-
     # quantis or any other method requiring different engines in each ensemble
     has_ens_engs = config["simulation"].get("ensemble_engines", False)
     if not has_ens_engs:
@@ -223,6 +215,9 @@ def check_config(config: dict) -> None:
             "lambda_minus_one interface must be less than the first interface!"
         )
 
+    if "wf" in sh_moves[:2]:
+        raise TOMLConfigError("WF moves cannot be ran in the zero ensembles!")
+
     if quantis and lambda_minus_one:
         raise TOMLConfigError("Cannot run quantis with lambda_minus_one!")
 
@@ -287,11 +282,10 @@ def write_header(config: dict) -> None:
         config: the configuration dictionary
     """
     size = config["current"]["size"]
-    data_dir = config["output"]["data_dir"]
-    data_file = os.path.join(data_dir, "infretis_data.txt")
+    data_file = "infretis_data.txt"
     if os.path.isfile(data_file):
         for i in range(1, 1000):
-            data_file = os.path.join(data_dir, f"infretis_data_{i}.txt")
+            data_file = f"infretis_data_{i}.txt"
             if not os.path.isfile(data_file):
                 break
 

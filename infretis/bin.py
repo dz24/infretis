@@ -4,6 +4,7 @@ import argparse
 
 from infretis.scheduler import scheduler
 from infretis.setup import setup_config
+import os
 
 
 def infretisrun():
@@ -15,6 +16,12 @@ def infretisrun():
 
     args_dict = vars(parser.parse_args())
     input_file = args_dict["input"]
+
+    # If restart exist, exit!
+    restart = "restart.toml"
+    if os.path.exists(restart) and input_file != restart:
+        print("restart.toml file exist! Exit infretisrun now.")
+        return
 
     # Run the infretis scheduler
     internalrun(input_file)

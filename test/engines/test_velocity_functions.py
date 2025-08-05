@@ -38,7 +38,7 @@ def return_turtlemd_engine():
         config = tomli.load(rfile)
     engine = create_engine(config)
     engine.input_path = input_path
-    engine.rgen = np.random.default_rng()
+    engine.rgen = np.random.default_rng(seed=0)
     engine.vel_settings = {
         "zero_momentum": False,
         "temperature": 300,
@@ -50,7 +50,7 @@ def return_lammps_engine():
     """Set up a lammps engine for the H2 system."""
     lammps_input_path = HERE / "../../examples/lammps/H2/lammps_input"
     engine = LAMMPSEngine("lmp_mpi", lammps_input_path.resolve(), 0, 0, 300)
-    engine.rgen = np.random.default_rng()
+    engine.rgen = np.random.default_rng(seed=0)
     engine.vel_settings = {
         "zero_momentum": False,
     }
@@ -73,7 +73,7 @@ def return_gromacs_engine():
     engine.vel_settings = {
         "zero_momentum": True,
     }
-    engine.rgen = np.random.default_rng()
+    engine.rgen = np.random.default_rng(seed=0)
     return engine
 
 
@@ -81,7 +81,7 @@ def return_cp2k_engine():
     """Set up a cp2k engine for the H2 system."""
     cp2k_input_path = HERE / "../../examples/cp2k/H2/cp2k_input"
     engine = CP2KEngine("cp2k", cp2k_input_path.resolve(), 1, 1, 300)
-    engine.rgen = np.random.default_rng()
+    engine.rgen = np.random.default_rng(seed=0)
     engine.vel_settings = {
         "zero_momentum": False,
     }
@@ -181,8 +181,8 @@ def test_modify_velocity_distribition(tmp_path, engine):
     if type(engine.input_path) == str:
         initial_conf = pathlib.Path(engine.input_path + f"/conf.{engine.ext}")
     else:
-        initial_conf = engine.input_path / f"conf.{engine.ext}"    
-        
+        initial_conf = engine.input_path / f"conf.{engine.ext}"
+
     engine.exe_dir = folder
 
     system = System()
