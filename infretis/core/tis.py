@@ -179,7 +179,7 @@ def compute_weight(path: InfPath, interfaces: List[float], move: str) -> float:
     if path.get_start_point(
         interfaces[0], interfaces[2]
     ) != path.get_end_point(interfaces[0], interfaces[2]):
-        if move in ("ss", "wf"):
+        if move in ("wf",):
             weight *= 2
 
     return weight
@@ -445,7 +445,6 @@ def shoot(
         if trial_path.length == ens_set["tis_set"]["maxlength"]:
             trial_path.status = "FTX"  # exceeds "memory".
         return False, trial_path, trial_path.status
-
 
     # Deal with the rejections for path properties.
     # Make sure we did not hit the left interface on {0-}
@@ -998,9 +997,6 @@ def retis_swap_zero(
 
         # These should be 1 unless length of paths equals 3.
         # This technicality is not yet fixed. (An issue is open as a reminder)
-
-        # ens_set = settings['ensemble'][i]
-        move = ens_moves[i]
 
     return accept, [path0, path1], status
 
