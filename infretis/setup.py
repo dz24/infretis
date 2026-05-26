@@ -171,6 +171,8 @@ def setup_config(
     config["output"].setdefault("keep_maxop_trajs", False)
     config["output"].setdefault("delete_old", False)
     config["output"].setdefault("delete_old_all", False)
+    config["output"].setdefault("keep_traj_fnames", [])
+    config["output"].setdefault("keep_status", [])
 
     # validation for output settings
     keep_maxop_trajs = config["output"]["keep_maxop_trajs"]
