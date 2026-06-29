@@ -1,4 +1,5 @@
 """Test methods for doing TIS."""
+
 import difflib
 import filecmp
 import os
@@ -107,7 +108,7 @@ def rm_restarted_from(inp):
 
 
 @pytest.mark.heavy
-def test_run_airetis_wf(tmp_path: PosixPath) -> None:
+def test_run_airetis_wf(tmp_path: PosixPath, monkeypatch) -> None:
     folder = tmp_path / "temp"
     folder.mkdir()
     basepath = PosixPath(__file__).parent
@@ -119,7 +120,7 @@ def test_run_airetis_wf(tmp_path: PosixPath) -> None:
     shutil.copytree(str(load_dir), str(folder) + "/load")
     shutil.copy(str(load_dir / "../orderp.py"), str(folder))
     shutil.copy(str(toml_dir), str(folder) + "/infretis.toml")
-    os.chdir(folder)
+    monkeypatch.chdir(folder)
 
     isnone = internalrun("infretis.toml")
     assert isnone is None
@@ -184,7 +185,7 @@ def test_run_airetis_wf(tmp_path: PosixPath) -> None:
 
 
 @pytest.mark.heavy
-def test_restart_multiple_w(tmp_path: PosixPath) -> None:
+def test_restart_multiple_w(tmp_path: PosixPath, monkeypatch) -> None:
     """Check that restarted workers continue the same tasks pre-restart."""
     folder = tmp_path / "temp"
     folder.mkdir()
@@ -197,7 +198,7 @@ def test_restart_multiple_w(tmp_path: PosixPath) -> None:
     shutil.copytree(str(load_dir), str(folder) + "/load")
     shutil.copy(str(load_dir / "../orderp.py"), str(folder))
     shutil.copy(str(toml_dir), str(folder) + "/infretis.toml")
-    os.chdir(folder)
+    monkeypatch.chdir(folder)
 
     workers = 4
     with open("infretis.toml", mode="rb") as f:

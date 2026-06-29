@@ -53,6 +53,7 @@ def setup_internal(config: dict) -> Tuple[dict, REPEX_state]:
         "mc_moves": state.mc_moves,
         "interfaces": state.interfaces,
         "cap": state.cap,
+        "temperature_index": config["current"].get("temperature_index", 0),
     }
 
     # setup the engine_occupation list
@@ -112,6 +113,11 @@ def setup_config(
     if "current" in config:
         curr = config["current"]
 
+        if "temperature_layers" in curr:
+            raise TOMLConfigError(
+                "layered temperature restarts are no longer supported"
+            )
+
         # if cstep and steps are equal, we stop here.
         if curr.get("cstep") == curr.get("restarted_from", -1):
             return None
@@ -138,6 +144,7 @@ def setup_config(
             "wsubcycles": [0 for _ in range(config["runner"]["workers"])],
             "tsubcycles": 0,
         }
+        setup_temperatures(config)
 
         # write/overwrite infretis_data.txt
         write_header(config)
@@ -159,6 +166,7 @@ def setup_config(
     config["simulation"].setdefault("load_dir", "load")
     config["simulation"].setdefault("zeroswap", 0.5)
     config["simulation"].setdefault("pick_scheme", 0)
+    setup_temperatures(config)
 
     # [simulation.tis_set] defaults
     config["simulation"]["tis_set"].setdefault("quantis", False)
@@ -195,6 +203,52 @@ def setup_config(
     check_config(config)
 
     return config
+
+
+def setup_temperatures(config: dict) -> None:
+    """Normalize the optional 2D temperature config."""
+    temperatures = config["simulation"].get("temperatures")
+    if temperatures is None:
+        return
+    if not isinstance(temperatures, list) or not temperatures:
+        raise TOMLConfigError(
+            "simulation.temperatures must be a non-empty list"
+        )
+
+    temperatures = [float(temp) for temp in temperatures]
+    if len(set(temperatures)) != 1:
+        raise TOMLConfigError(
+            "distinct temperature layers are not implemented yet"
+        )
+
+    config["simulation"]["temperatures"] = temperatures
+    ntemps = len(temperatures)
+    config["simulation"]["temperature_count"] = ntemps
+    if ntemps == 1:
+        config["current"].setdefault("temperature_index", 0)
+        return
+
+    current = config["current"]
+    base_size = current.setdefault(
+        "base_size", len(config["simulation"]["interfaces"])
+    )
+    expanded_size = base_size * ntemps
+    if current.get("size") == base_size:
+        current["size"] = expanded_size
+        current["active"] = list(range(expanded_size))
+        current["traj_num"] = expanded_size
+        current["locked"] = []
+        current["frac"] = {}
+
+    current.setdefault("temperature_index", 0)
+
+    ens_engs = config["simulation"].get("ensemble_engines")
+    if ens_engs is not None and len(ens_engs) == base_size:
+        expanded_engs = []
+        expanded_engs.extend(ens_engs[0] for _ in range(ntemps))
+        for ens_eng in ens_engs[1:]:
+            expanded_engs.extend(ens_eng for _ in range(ntemps))
+        config["simulation"]["ensemble_engines"] = expanded_engs
 
 
 def check_config(config: dict) -> None:
@@ -290,14 +344,41 @@ def write_header(config: dict) -> None:
     """
     size = config["current"]["size"]
     data_dir = config["output"]["data_dir"]
-    data_file = os.path.join(data_dir, "infretis_data.txt")
-    if os.path.isfile(data_file):
-        for i in range(1, 1000):
-            data_file = os.path.join(data_dir, f"infretis_data_{i}.txt")
-            if not os.path.isfile(data_file):
-                break
+    temperatures = config.get("simulation", {}).get("temperatures")
+    stems = ["infretis_data"]
+    if temperatures is not None:
+        stems = [f"infretis_data_T{i:03d}" for i in range(len(temperatures))]
 
-    config["output"]["data_file"] = data_file
+    data_files = []
+    for stem in stems:
+        data_file = next_data_file(data_dir, stem)
+        data_files.append(data_file)
+        header_size = (
+            config["current"].get("base_size", size)
+            if temperatures is not None and len(temperatures) > 1
+            else size
+        )
+        write_data_header(data_file, header_size)
+
+    config["output"]["data_file"] = data_files[0]
+    if temperatures is not None:
+        config["output"]["data_files"] = data_files
+
+
+def next_data_file(data_dir: str, stem: str) -> str:
+    """Return an unused data filename."""
+    data_file = os.path.join(data_dir, f"{stem}.txt")
+    if not os.path.isfile(data_file):
+        return data_file
+    for i in range(1, 1000):
+        data_file = os.path.join(data_dir, f"{stem}_{i}.txt")
+        if not os.path.isfile(data_file):
+            return data_file
+    raise TOMLConfigError(f"Could not create output file for {stem}")
+
+
+def write_data_header(data_file: str, size: int) -> None:
+    """Write the infretis data header."""
     with open(data_file, "w", encoding="utf-8") as write:
         write.write("# " + "=" * (34 + 8 * size) + "\n")
         ens_str = "\t".join([f"{i:03.0f}" for i in range(size)])

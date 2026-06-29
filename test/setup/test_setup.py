@@ -8,17 +8,18 @@ from infretis.setup import (
     TOMLConfigError,
     check_config,
     setup_config,
+    setup_temperatures,
     write_header,
 )
 
 HERE = Path(__file__).resolve().parent
 
 
-def test_write_header(tmp_path: PosixPath) -> None:
+def test_write_header(tmp_path: PosixPath, monkeypatch) -> None:
     """Test that we create new data file if datafile already present."""
     f1 = tmp_path / "temp"
     f1.mkdir()
-    os.chdir(f1)
+    monkeypatch.chdir(f1)
     config: dict = {"current": {"size": 10}, "output": {"data_dir": "./"}}
 
     # write the first infretis_data.txt file
@@ -30,6 +31,41 @@ def test_write_header(tmp_path: PosixPath) -> None:
         isfile = f"./infretis_data_{i}.txt"
         assert os.path.isfile(isfile)
         assert config["output"]["data_file"] == isfile
+
+
+def test_write_header_temperature_layers(
+    tmp_path: PosixPath, monkeypatch
+) -> None:
+    """Test per-temperature data file names."""
+    f1 = tmp_path / "temp"
+    f1.mkdir()
+    monkeypatch.chdir(f1)
+    config = {
+        "current": {"size": 10},
+        "simulation": {"temperatures": [0.07, 0.07]},
+        "output": {"data_dir": "./"},
+    }
+
+    write_header(config)
+
+    assert os.path.isfile("./infretis_data_T000.txt")
+    assert os.path.isfile("./infretis_data_T001.txt")
+    assert config["output"]["data_file"] == "./infretis_data_T000.txt"
+    assert config["output"]["data_files"] == [
+        "./infretis_data_T000.txt",
+        "./infretis_data_T001.txt",
+    ]
+
+
+def test_setup_temperatures_requires_equal_layers() -> None:
+    """Different temperature layers are not active yet."""
+    config = {
+        "current": {},
+        "simulation": {"temperatures": [0.07, 0.08]},
+    }
+
+    with pytest.raises(TOMLConfigError):
+        setup_temperatures(config)
 
 
 def set_nested_value(d, keys, value):

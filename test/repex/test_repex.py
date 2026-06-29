@@ -1,23 +1,17 @@
-import os
+import copy
 from pathlib import PosixPath
+
 import tomli
 
 from infretis.classes.repex import REPEX_state, spawn_rng
 
 
-def test_rgen_io(tmp_path: PosixPath) -> None:
+def test_rgen_io(tmp_path: PosixPath, monkeypatch) -> None:
     """Test repex rgen and rgen spawn reproducability."""
-    state = REPEX_state(
-        {
-            "current": {"size": 1, "cstep": 0},
-            "runner": {"workers": 1},
-            "simulation": {"seed": 0, "steps":10,
-                           "zeroswap": 0.5, "pick_scheme": 0},
-        }
-    )
+    state = REPEX_state(repex_config())
     folder = tmp_path / "temp"
     folder.mkdir()
-    os.chdir(folder)
+    monkeypatch.chdir(folder)
 
     # save initial state for restart
     state.write_toml()
@@ -41,3 +35,28 @@ def test_rgen_io(tmp_path: PosixPath) -> None:
         assert state.rgen.random() == rng
         child = spawn_rng(state.rgen)
         assert child.random() == child_rng
+
+
+def test_repex_state_uses_instance_data() -> None:
+    """REPEX states should not share mutable path state."""
+    state1 = REPEX_state(copy.deepcopy(repex_config()))
+    state2 = REPEX_state(copy.deepcopy(repex_config()))
+
+    state1.traj_data[0] = {"length": 1}
+
+    assert state2.traj_data == {}
+    assert state1.pstore is not state2.pstore
+
+
+def repex_config():
+    """Small REPEX config."""
+    return {
+        "current": {"size": 1, "cstep": 0},
+        "runner": {"workers": 1},
+        "simulation": {
+            "seed": 0,
+            "steps": 10,
+            "zeroswap": 0.5,
+            "pick_scheme": 0,
+        },
+    }

@@ -57,6 +57,10 @@ class REPEX_state:
     def __init__(self, config, minus=False):
         """Initiate REPEX given confic dict from *toml file."""
         self.config = config
+        self.traj_data = {}
+        self.ensembles = {}
+        self.engine_occ = {}
+        self.pstore = PathStorage()
         # storage of additional trajectory files
         self.pstore.keep_traj_fnames = config.get("output", {}).get(
             "keep_traj_fnames", []
@@ -68,9 +72,13 @@ class REPEX_state:
             self.rgen = default_rng(seed=config["simulation"]["seed"])
 
         n = config["current"]["size"]
+        self.temperature_count = config["simulation"].get(
+            "temperature_count", 1
+        )
+        self.base_size = config["current"].get("base_size", n)
         if minus:
-            self._offset = int(minus)
-            n += int(minus)
+            self._offset = self.temperature_count
+            n += 1 if self.temperature_count > 1 else int(minus)
         else:
             self._offset = 0
 
@@ -141,6 +149,10 @@ class REPEX_state:
     @property
     def data_file(self):
         """Retrieve data_file from config dict."""
+        data_files = self.config["output"].get("data_files")
+        if data_files is not None:
+            idx = self.config["current"].get("temperature_index", 0)
+            return data_files[idx]
         return self.config["output"]["data_file"]
 
     @property
@@ -167,6 +179,75 @@ class REPEX_state:
                 val, self.config["simulation"]["interfaces"][-1]
             )
 
+    def internal_ens(self, ens_num):
+        """Convert an external ensemble number to a state index."""
+        return int(ens_num + self._offset)
+
+    def slot_info(self, internal):
+        """Return ``(base_ensemble, temperature)`` for a state index."""
+        internal = int(internal)
+        if self.temperature_count == 1:
+            return internal, 0
+        if internal < self._offset:
+            return 0, internal
+        positive = internal - self._offset
+        return positive // self.temperature_count + 1, (
+            positive % self.temperature_count
+        )
+
+    def external_slot(self, base_ensemble, temperature):
+        """Return the external ensemble number for a base/temp slot."""
+        if self.temperature_count == 1:
+            return base_ensemble - self._offset
+        if base_ensemble == 0:
+            internal = temperature
+        else:
+            internal = (
+                self._offset
+                + (base_ensemble - 1) * self.temperature_count
+                + temperature
+            )
+        return internal - self._offset
+
+    def zero_swap_partner(self, internal):
+        """Return the paired 0-/0+ state index, if this is a zero slot."""
+        base_ensemble, temperature = self.slot_info(internal)
+        if base_ensemble == 0:
+            return self.internal_ens(self.external_slot(1, temperature))
+        if base_ensemble == 1:
+            return self.internal_ens(self.external_slot(0, temperature))
+        return None
+
+    def expand_weights(self, weights):
+        """Expand base TIS weights over equal-temperature slots."""
+        if self.temperature_count == 1:
+            return weights
+        expanded = []
+        for weight in weights[:-1]:
+            expanded.extend([weight] * self.temperature_count)
+        expanded.append(weights[-1])
+        return tuple(expanded)
+
+    def path_weights(self, path, ens_num):
+        """Calculate path weights for the combined state."""
+        internal = self.internal_ens(ens_num)
+        minus = self.slot_info(internal)[0] == 0
+        weights = calc_cv_vector(
+            path,
+            self.config["simulation"]["interfaces"],
+            self.mc_moves,
+            lambda_minus_one=self.config["simulation"]["tis_set"][
+                "lambda_minus_one"
+            ],
+            cap=self.cap,
+            minus=minus,
+        )
+        if not minus:
+            return self.expand_weights(weights)
+        if self.temperature_count == 1:
+            return weights
+        return tuple([weights[0]] * self.temperature_count)
+
     def pick(self):
         """Pick path and ens."""
         prob = self.prob.astype("float64")
@@ -190,22 +271,20 @@ class REPEX_state:
         ens_nums = (ens - self._offset,)
         inp_trajs = (traj,)
 
+        other = self.zero_swap_partner(ens)
         if (
-            (ens == self._offset and not self._locks[self._offset - 1])
-            or (ens == self._offset - 1 and not self._locks[self._offset])
-        ) and self.rgen.random() < self.zeroswap:
-            if ens == self._offset:
-                # ens = 0
-                other = self._offset - 1
-                other_traj = self.pick_traj_ens(other)
-                ens_nums = (-1, 0)
-                inp_trajs = (other_traj, traj)
-            else:
-                # ens = -1
-                other = self._offset
-                other_traj = self.pick_traj_ens(other)
-                ens_nums = (-1, 0)
-                inp_trajs = (traj, other_traj)
+            other is not None
+            and not self._locks[other]
+            and self.rgen.random() < self.zeroswap
+        ):
+            other_traj = self.pick_traj_ens(other)
+            minus = ens if ens < self._offset else other
+            plus = other if ens < self._offset else ens
+            ens_nums = (minus - self._offset, plus - self._offset)
+            inp_trajs = (
+                traj if ens == minus else other_traj,
+                other_traj if ens == minus else traj,
+            )
 
         # lock and print the picked traj and ens
         pat_nums = [str(i.path_number) for i in inp_trajs]
@@ -216,7 +295,7 @@ class REPEX_state:
 
         child_rng = spawn_rng(self.rgen)
         for ens_num, inp_traj in zip(ens_nums, inp_trajs):
-            ens_pick = self.ensembles[ens_num + 1]
+            ens_pick = self.ensembles[self.internal_ens(ens_num)]
             ens_pick["rgen"] = spawn_rng(child_rng)
             picked[ens_num] = {
                 "ens": ens_pick,
@@ -261,7 +340,7 @@ class REPEX_state:
 
         child_rng = spawn_rng(self.rgen)
         for ens_num, inp_traj in zip(enss, trajs):
-            ens_pick = self.ensembles[ens_num + 1]
+            ens_pick = self.ensembles[self.internal_ens(ens_num)]
             ens_pick["rgen"] = spawn_rng(child_rng)
             picked[ens_num] = {
                 "ens": ens_pick,
@@ -283,12 +362,23 @@ class REPEX_state:
             # pick lock
             md_items["picked"] = self.pick_lock()
 
-            # set the worker folder
-            w_folder = os.path.join(os.getcwd(), f"worker{md_items['pin']}")
-            make_dirs(w_folder)
-            md_items["w_folder"] = w_folder
+            ens0 = next(iter(md_items["picked"]))
+            temp = self.slot_info(self.internal_ens(ens0))[1]
+            md_items["temperature_index"] = temp
+            if self.temperature_count > 1:
+                self.config["current"]["temperature_index"] = temp
+
         else:
             md_items["picked"] = self.pick()
+            ens0 = next(iter(md_items["picked"]))
+            temp = self.slot_info(self.internal_ens(ens0))[1]
+            md_items["temperature_index"] = temp
+            if self.temperature_count > 1:
+                self.config["current"]["temperature_index"] = temp
+
+        w_folder = os.path.join(os.getcwd(), f"worker{md_items['pin']}")
+        make_dirs(w_folder)
+        md_items["w_folder"] = w_folder
 
         # Record ens_nums
         md_items["ens_nums"] = list(md_items["picked"].keys())
@@ -306,7 +396,7 @@ class REPEX_state:
             ens_rgen = md_items["picked"][ens_num]["ens"]["rgen"]
             md_items["picked"][ens_num]["rgen-eng"] = spawn_rng(ens_rgen)
             md_items["picked"][ens_num]["pin"] = md_items["pin"]
-            eng_names += ens_engs[ens_num + 1]
+            eng_names += ens_engs[self.internal_ens(ens_num)]
 
         # engine assignment
         unique_eng_names = list(set(eng_names))
@@ -315,7 +405,8 @@ class REPEX_state:
         )
         for ens_num in md_items["ens_nums"]:
             md_items["picked"][ens_num]["eng_idx"] = {
-                eng: eng_idx[eng] for eng in ens_engs[ens_num + 1]
+                eng: eng_idx[eng]
+                for eng in ens_engs[self.internal_ens(ens_num)]
             }
 
         # check time:
@@ -338,10 +429,16 @@ class REPEX_state:
         if ens >= 0 and self._offset != 0:
             valid = tuple([0 for _ in range(self._offset)] + list(valid))
         elif ens < 0:
-            valid = tuple(
-                list(valid) + [0 for _ in range(self.n - self._offset)]
-            )
-        ens += self._offset
+            if self._offset > 1:
+                valid_full = list(valid) + [
+                    0 for _ in range(self.n - self._offset)
+                ]
+                valid = tuple(valid_full)
+            else:
+                valid = tuple(
+                    list(valid) + [0 for _ in range(self.n - self._offset)]
+                )
+        ens = self.internal_ens(ens)
 
         if valid[ens] == 0:
             # The path is not valid in ensemble.
@@ -367,13 +464,28 @@ class REPEX_state:
         self.unlock(ens)
 
         # Calculate P matrix
-        self.prob
+        if count:
+            self.prob
 
     def sort_trajstate(self):
         """Sort trajs and calculate P matrix."""
-        needstomove = [
-            self.state[idx][:-1][idx] == 0 for idx in range(self.n - 1)
-        ]
+        if self.temperature_count > 1:
+            self._last_prob = None
+            self.prob
+            return
+
+        if np.any(self._locks[:-1] == 1):
+            self._last_prob = None
+            self.prob
+            return
+
+        def needs_move():
+            return [
+                self._locks[idx] == 0 and self.state[idx][:-1][idx] == 0
+                for idx in range(self.n - 1)
+            ]
+
+        needstomove = needs_move()
         while True in needstomove and self.toinitiate == -1:
             ens_idx = list(needstomove).index(True)
             locks = self.locked_paths()
@@ -385,9 +497,7 @@ class REPEX_state:
             ]
             trj_idx = avail.index(1)
             self.swap(ens_idx, trj_idx)
-            needstomove = [
-                self.state[idx][:-1][idx] == 0 for idx in range(self.n - 1)
-            ]
+            needstomove = needs_move()
         self._last_prob = None
         self.prob
 
@@ -602,9 +712,11 @@ class REPEX_state:
         # edge case that negative probs exist: set to zero
         if np.sum(out < 0) > 0:
             out[out < 0] = 0
-            logger.info(f"Found {int(np.sum(out<0))} precision \
+            logger.info(
+                f"Found {int(np.sum(out<0))} precision \
                 errors in the P-matrix, setting negative \
-                elements to 0. min: {np.min(out):.3e}")
+                elements to 0. min: {np.min(out):.3e}"
+            )
 
         # reinsert zeroes for the locked ensembles
         final_out_rows = np.insert(out, insert_list, 0, axis=0)
@@ -761,9 +873,11 @@ class REPEX_state:
 
         return total / num_loops
 
-    def write_toml(self):
-        """Toml writer."""
-        self.config["current"]["active"] = self.live_paths()
+    def update_current(self):
+        """Update restart state in the config."""
+        self.config["current"]["active"] = [
+            int(path_num) for path_num in self.live_paths()
+        ]
         locked_ep = []
         for tup in self.locked:
             locked_ep.append(
@@ -778,6 +892,12 @@ class REPEX_state:
             fracs = [str(i) for i in self.traj_data[key]["frac"]]
             self.config["current"]["frac"][str(key)] = fracs
 
+    def write_toml(self):
+        """Toml writer."""
+        self.update_current()
+        if self.config["current"].get("_skip_restart_write", False):
+            return
+
         with open("./restart.toml", "wb") as f:
             tomli_w.dump(self.config, f)
 
@@ -787,11 +907,14 @@ class REPEX_state:
 
     def print_pick(self, ens_nums, pat_nums, pin):
         """Print pick."""
-        if len(ens_nums) > 1 or ens_nums[0] == -1:
+        base_ensemble = self.slot_info(self.internal_ens(ens_nums[0]))[0]
+        if len(ens_nums) > 1 or base_ensemble == 0:
             move = "sh"
         else:
-            move = self.mc_moves[ens_nums[0] + 1]
-        ens_p = " ".join([f"00{ens_num+1}" for ens_num in ens_nums])
+            move = self.ensembles[self.internal_ens(ens_nums[0])]["mc_move"]
+        ens_p = " ".join(
+            [self.ensemble_label(ens_num) for ens_num in ens_nums]
+        )
         pat_p = " ".join(pat_nums)
         logger.info(
             f"shooting {move} in ensembles: {ens_p} with paths:"
@@ -801,7 +924,9 @@ class REPEX_state:
     def print_shooted(self, md_items, pn_news):
         """Print shooted."""
         moves = md_items["moves"]
-        ens_nums = " ".join([f"00{i+1}" for i in md_items["ens_nums"]])
+        ens_nums = " ".join(
+            [self.ensemble_label(i) for i in md_items["ens_nums"]]
+        )
         pnum_old = " ".join([str(i) for i in md_items["pnum_old"]])
         pnum_new = " ".join([str(i) for i in pn_news])
         trial_lens = " ".join([str(i) for i in md_items["trial_len"]])
@@ -835,9 +960,23 @@ class REPEX_state:
         logger.info("stored ensemble paths:")
         ens_num = self.live_paths()
         logger.info(
-            " ".join([f"00{i}: {j}," for i, j in enumerate(ens_num)]) + "\n"
+            " ".join(
+                [f"{self.state_label(i)}: {j}," for i, j in enumerate(ens_num)]
+            )
+            + "\n"
         )
         self.print_state()
+
+    def ensemble_label(self, ens_num):
+        """Format an external ensemble number."""
+        return self.state_label(self.internal_ens(ens_num))
+
+    def state_label(self, idx):
+        """Format a state matrix ensemble number."""
+        if self.temperature_count == 1:
+            return f"{idx:03.0f}"
+        base_ensemble, temperature = self.slot_info(idx)
+        return f"{base_ensemble:03d}_t{temperature}"
 
     def print_state(self):
         """Print state."""
@@ -848,12 +987,12 @@ class REPEX_state:
 
         logger.info("===")
         logger.info(" xx |\tv Ensemble numbers v")
-        to_print = [f"{i:03.0f}" for i in range(self.n - 1)]
-        for i in range(len(to_print[0])):
-            to_print0 = " ".join([j[i] for j in to_print])
-            if i == len(to_print[0]) - 1:
-                to_print0 += "\t\tmax_op\tmin_op\tlen"
-            logger.info(" xx |\t" + to_print0)
+        labels = [self.state_label(i) for i in range(self.n - 1)]
+        width = max(len(label) for label in labels)
+        for row in range(width):
+            row_chars = [label.ljust(width)[row] for label in labels]
+            suffix = "\t\tmax_op\tmin_op\tlen" if row == width - 1 else ""
+            logger.info(" xx |\t" + " ".join(row_chars) + suffix)
 
         logger.info(" -- |\t" + "".join("--" for _ in range(self.n + 14)))
 
@@ -902,7 +1041,8 @@ class REPEX_state:
         logger.info("--------------------------------------------------")
         logger.info(f"live trajs: {live_trajs} after {stopping} cycles")
         logger.info("==================================================")
-        logger.info("xxx | 000        001     002     003     004     |")
+        labels = "\t".join([self.state_label(i) for i in range(self.n - 1)])
+        logger.info(f"xxx | {labels} |")
         logger.info("--------------------------------------------------")
         for key, item in self.traj_data.items():
             values = "\t".join(
@@ -923,7 +1063,7 @@ class REPEX_state:
         for ens_num in picked.keys():
             pn_old = picked[ens_num]["pn_old"]
             out_traj = picked[ens_num]["traj"]
-            self.ensembles[ens_num + 1] = picked[ens_num]["ens"]
+            self.ensembles[self.internal_ens(ens_num)] = picked[ens_num]["ens"]
             path_status = md_items["status"]
 
             for idx, lock in enumerate(self.locked):
@@ -931,8 +1071,11 @@ class REPEX_state:
                     self.locked.pop(idx)
             # if path is new: number and save the path:
             if out_traj.path_number is None or path_status == "ACC":
+                if path_status == "ACC":
+                    out_traj.weights = self.path_weights(out_traj, ens_num)
                 # keep track of the highest order value seen during the sim
-                if ens_num != -1 and out_traj.ordermax[0] > self.maxop:
+                base_ensemble = self.slot_info(self.internal_ens(ens_num))[0]
+                if base_ensemble != 0 and out_traj.ordermax[0] > self.maxop:
                     self.maxop = out_traj.ordermax[0]
                 # move to accept:
                 ens_save_idx = self.traj_data[pn_old]["ens_save_idx"]
@@ -1040,58 +1183,34 @@ class REPEX_state:
 
     def load_paths(self, paths):
         """Load paths."""
-        size = self.n - 1
-        # we add all the i+ paths.
-        for i in range(size - 1):
-            paths[i + 1].weights = calc_cv_vector(
-                paths[i + 1],
-                self.config["simulation"]["interfaces"],
-                self.mc_moves,
-                lambda_minus_one=self.config["simulation"]["tis_set"][
-                    "lambda_minus_one"
-                ],
-                cap=self.cap,
-            )
+        for internal, path in enumerate(paths):
+            ens_num = internal - self._offset
+            path.weights = self.path_weights(path, ens_num)
             self.add_traj(
-                ens=i,
-                traj=paths[i + 1],
-                valid=paths[i + 1].weights,
+                ens=ens_num,
+                traj=path,
+                valid=path.weights,
                 count=False,
             )
-            pnum = paths[i + 1].path_number
+            pnum = path.path_number
             frac = self.config["current"]["frac"].get(
-                str(pnum), np.zeros(size + 1)
+                str(pnum), np.zeros(self.n)
             )
             self.traj_data[pnum] = {
-                "ens_save_idx": i + 1,
-                "max_op": paths[i + 1].ordermax,
-                "min_op": paths[i + 1].ordermin,
-                "length": paths[i + 1].length,
-                "adress": paths[i + 1].adress,
-                "weights": paths[i + 1].weights,
+                "ens_save_idx": internal,
+                "max_op": path.ordermax,
+                "min_op": path.ordermin,
+                "length": path.length,
+                "adress": path.adress,
+                "weights": path.weights,
                 "frac": np.array(frac, dtype="longdouble"),
             }
-            # keep track of max op of i+ path
-            if paths[i + 1].ordermax[0] > self.maxop:
-                self.maxop = paths[i + 1].ordermax[0]
-        # add minus path:
-        paths[0].weights = (1.0,)
-        pnum = paths[0].path_number
-        self.add_traj(
-            ens=-1, traj=paths[0], valid=paths[0].weights, count=False
-        )
-        frac = self.config["current"]["frac"].get(
-            str(pnum), np.zeros(size + 1)
-        )
-        self.traj_data[pnum] = {
-            "ens_save_idx": 0,
-            "max_op": paths[0].ordermax,
-            "min_op": paths[0].ordermin,
-            "length": paths[0].length,
-            "weights": paths[0].weights,
-            "adress": paths[0].adress,
-            "frac": np.array(frac, dtype="longdouble"),
-        }
+            if (
+                self.slot_info(internal)[0] != 0
+                and path.ordermax[0] > self.maxop
+            ):
+                self.maxop = path.ordermax[0]
+        self.prob
 
     def initiate_ensembles(self):
         """Create all the ensemble dicts from the *toml config dict."""
@@ -1131,7 +1250,26 @@ class REPEX_state:
                 ),
             }
 
-        self.ensembles = pensembles
+        if self.temperature_count == 1:
+            self.ensembles = pensembles
+            return
+
+        expanded = {}
+        for temperature in range(self.temperature_count):
+            ens = pensembles[0].copy()
+            ens["ens_name"] = self.state_label(temperature)
+            expanded[temperature] = ens
+
+        for base_ensemble in range(1, len(pensembles)):
+            for temperature in range(self.temperature_count):
+                internal = self.internal_ens(
+                    self.external_slot(base_ensemble, temperature)
+                )
+                ens = pensembles[base_ensemble].copy()
+                ens["ens_name"] = self.state_label(internal)
+                expanded[internal] = ens
+
+        self.ensembles = expanded
 
 
 def write_to_pathens(state, pn_archive):
@@ -1145,23 +1283,42 @@ def write_to_pathens(state, pn_archive):
             string += f"\t{pn:3.0f}\t"
             string += f"{traj_data[pn]['length']:5.0f}" + "\t"
             string += f"{traj_data[pn]['max_op'][0]:8.5f}" + "\t"
+            weights = traj_data[pn]["weights"]
+            if len(weights) == size:
+                full_weights = weights
+            elif len(weights) == state._offset:
+                full_weights = list(weights) + [
+                    0.0 for _ in range(size - state._offset)
+                ]
+            elif len(weights) == 1:
+                full_weights = [0.0 for _ in range(size)]
+                full_weights[traj_data[pn]["ens_save_idx"]] = weights[0]
+            else:
+                full_weights = [0.0 for _ in range(state._offset)]
+                full_weights += list(weights)
+
+            frac_values = traj_data[pn]["frac"][:-1]
+            weight_values = full_weights[:-1]
+            if (
+                state.temperature_count > 1
+                and state.config["output"].get("data_files") is not None
+            ):
+                temp_idx = state.config["current"].get("temperature_index", 0)
+                temp_columns = [temp_idx]
+                temp_columns += [
+                    state._offset
+                    + (base_ensemble - 1) * state.temperature_count
+                    + temp_idx
+                    for base_ensemble in range(1, state.base_size)
+                ]
+                frac_values = [frac_values[idx] for idx in temp_columns]
+                weight_values = [weight_values[idx] for idx in temp_columns]
+
             frac = []
             weight = []
-            if len(traj_data[pn]["weights"]) == 1:
-                f0 = traj_data[pn]["frac"][0]
-                w0 = traj_data[pn]["weights"][0]
+            for w0, f0 in zip(weight_values, frac_values):
                 frac.append("----" if f0 == 0.0 else str(f0))
                 weight.append("----" if f0 == 0.0 else str(w0))
-                frac += ["----"] * (size - 2)
-                weight += ["----"] * (size - 2)
-            else:
-                frac.append("----")
-                weight.append("----")
-                for w0, f0 in zip(
-                    traj_data[pn]["weights"][:-1], traj_data[pn]["frac"][1:-1]
-                ):
-                    frac.append("----" if f0 == 0.0 else str(f0))
-                    weight.append("----" if f0 == 0.0 else str(w0))
             fp.write(
                 string + "\t".join(frac) + "\t" + "\t".join(weight) + "\t\n"
             )

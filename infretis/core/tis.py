@@ -70,7 +70,7 @@ def run_md(md_items: Dict[str, Any]) -> Dict[str, Any]:
     # Record data
     for trial, ens_num in zip(trials, picked.keys()):
         log_mdlogs(picked[ens_num]["exe_dir"])
-        md_items["moves"].append(md_items["mc_moves"][ens_num + 1])
+        md_items["moves"].append(picked[ens_num]["ens"]["mc_move"])
         md_items["trial_len"].append(trial.length)
         md_items["trial_op"].append((trial.ordermin[0], trial.ordermax[0]))
         md_items["generated"].append(trial.generated)
@@ -314,7 +314,8 @@ def select_shoot(
         )
         new_paths = [new_path]
     else:
-        if picked[-1]["ens"]["tis_set"]["quantis"]:
+        ens0 = sorted(picked)[0]
+        if picked[ens0]["ens"]["tis_set"]["quantis"]:
             accept, new_paths, status = quantis_swap_zero(picked, engines)
         else:
             accept, new_paths, status = retis_swap_zero(picked, engines)
@@ -846,12 +847,13 @@ def retis_swap_zero(
            interface.
 
     """
-    ens_set0 = picked[-1]["ens"]
-    ens_set1 = picked[0]["ens"]
-    engine0 = engines[-1][0]
-    engine1 = engines[0][0]
-    path_old0 = picked[-1]["traj"]
-    path_old1 = picked[0]["traj"]
+    ens0, ens1 = sorted(picked)
+    ens_set0 = picked[ens0]["ens"]
+    ens_set1 = picked[ens1]["ens"]
+    engine0 = engines[ens0][0]
+    engine1 = engines[ens1][0]
+    path_old0 = picked[ens0]["traj"]
+    path_old1 = picked[ens1]["traj"]
     maxlen0 = ens_set0["tis_set"]["maxlength"]
     maxlen1 = ens_set1["tis_set"]["maxlength"]
 
@@ -1119,12 +1121,13 @@ def quantis_swap_zero(
         paths. Should avoid zero swap if this is the case (see retis_swap_0)
 
     """
-    ens_set0 = picked[-1]["ens"]
-    ens_set1 = picked[0]["ens"]
-    engine0 = engines[-1][0]
-    engine1 = engines[0][0]
-    old_path0 = picked[-1]["traj"]
-    old_path1 = picked[0]["traj"]
+    ens0, ens1 = sorted(picked)
+    ens_set0 = picked[ens0]["ens"]
+    ens_set1 = picked[ens1]["ens"]
+    engine0 = engines[ens0][0]
+    engine1 = engines[ens1][0]
+    old_path0 = picked[ens0]["traj"]
+    old_path1 = picked[ens1]["traj"]
     maxlen0 = ens_set0["tis_set"]["maxlength"]
     maxlen1 = ens_set0["tis_set"]["maxlength"]
     lambda0 = ens_set0["interfaces"][-1]
