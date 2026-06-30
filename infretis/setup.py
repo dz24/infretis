@@ -216,12 +216,19 @@ def setup_temperatures(config: dict) -> None:
         )
 
     temperatures = [float(temp) for temp in temperatures]
-    if len(set(temperatures)) != 1:
-        raise TOMLConfigError(
-            "distinct temperature layers are not implemented yet"
-        )
+    exchange = config["simulation"].get("temperature_exchange")
+    if exchange is None:
+        exchange = len(set(temperatures)) == 1
+    elif isinstance(exchange, str):
+        exchange = exchange.lower()
+        if exchange not in {"nve"}:
+            raise TOMLConfigError(
+                "simulation.temperature_exchange must be true, false, "
+                "or 'nve'"
+            )
 
     config["simulation"]["temperatures"] = temperatures
+    config["simulation"]["temperature_exchange"] = exchange
     ntemps = len(temperatures)
     config["simulation"]["temperature_count"] = ntemps
     if ntemps == 1:

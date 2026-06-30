@@ -57,15 +57,51 @@ def test_write_header_temperature_layers(
     ]
 
 
-def test_setup_temperatures_requires_equal_layers() -> None:
-    """Different temperature layers are not active yet."""
+def test_setup_temperatures_distinct_layers_disable_exchange() -> None:
+    """Different temperatures use separate temperature layers."""
     config = {
-        "current": {},
-        "simulation": {"temperatures": [0.07, 0.08]},
+        "current": {
+            "active": [0, 1],
+            "frac": {},
+            "locked": [],
+            "size": 2,
+            "traj_num": 2,
+        },
+        "simulation": {
+            "interfaces": [0.0, 1.0],
+            "temperatures": [0.07, 0.08],
+        },
     }
 
-    with pytest.raises(TOMLConfigError):
-        setup_temperatures(config)
+    setup_temperatures(config)
+
+    assert config["simulation"]["temperature_count"] == 2
+    assert config["simulation"]["temperature_exchange"] is False
+    assert config["current"]["base_size"] == 2
+    assert config["current"]["size"] == 4
+    assert config["current"]["active"] == [0, 1, 2, 3]
+
+
+def test_setup_temperatures_accepts_nve_exchange() -> None:
+    """NVE temperature exchange is opt-in for distinct temperatures."""
+    config = {
+        "current": {
+            "active": [0, 1],
+            "frac": {},
+            "locked": [],
+            "size": 2,
+            "traj_num": 2,
+        },
+        "simulation": {
+            "interfaces": [0.0, 1.0],
+            "temperature_exchange": "nve",
+            "temperatures": [0.07, 0.08],
+        },
+    }
+
+    setup_temperatures(config)
+
+    assert config["simulation"]["temperature_exchange"] == "nve"
 
 
 def set_nested_value(d, keys, value):

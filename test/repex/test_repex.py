@@ -1,9 +1,12 @@
 import copy
 from pathlib import PosixPath
+from types import SimpleNamespace
 
+import numpy as np
+import pytest
 import tomli
 
-from infretis.classes.repex import REPEX_state, spawn_rng
+from infretis.classes.repex import REPEX_state, spawn_rng, write_to_pathens
 
 
 def test_rgen_io(tmp_path: PosixPath, monkeypatch) -> None:
@@ -46,6 +49,123 @@ def test_repex_state_uses_instance_data() -> None:
 
     assert state2.traj_data == {}
     assert state1.pstore is not state2.pstore
+
+
+def test_temperature_blocks_do_not_exchange() -> None:
+    """Distinct temperature layers use independent swap blocks."""
+    config = repex_config()
+    config["current"]["size"] = 4
+    config["simulation"]["temperature_count"] = 2
+    config["simulation"]["temperature_exchange"] = False
+    state = REPEX_state(config, minus=True)
+
+    matrix = state.state.copy()
+    matrix[0, 0] = 1
+    matrix[1, 1] = 1
+    matrix[2, 0] = 1
+    matrix[2, 2] = 1
+    matrix[3, 1] = 1
+    matrix[3, 3] = 1
+    locks = state._locks.copy()
+    locks[:4] = 0
+
+    prob = state.inf_retis(matrix, locks)
+
+    assert prob[:4, :4].sum(axis=1).tolist() == [1, 1, 1, 1]
+    assert prob[0, 1] == 0
+    assert prob[1, 0] == 0
+    assert prob[2, 3] == 0
+    assert prob[3, 2] == 0
+
+
+def test_nve_temperature_weight_uses_path_energy() -> None:
+    """NVE exchange weights use exp(-beta H(path))."""
+    config = repex_config()
+    config["current"]["size"] = 2
+    config["simulation"]["temperature_count"] = 2
+    config["simulation"]["temperature_exchange"] = "nve"
+    config["simulation"]["temperatures"] = [100.0, 200.0]
+    config["simulation"]["temperature_kb"] = 0.5
+    state = REPEX_state(config, minus=True)
+    path = SimpleNamespace(
+        phasepoints=[
+            SimpleNamespace(etot=1.0),
+            SimpleNamespace(etot=3.0),
+        ]
+    )
+
+    assert state.path_energy(path) == 2.0
+    assert state.temperature_weight(path, 0) == pytest.approx(
+        0.9607894391523232
+    )
+    assert state.temperature_weight(path, 1) == pytest.approx(
+        0.9801986733067553
+    )
+
+
+def test_nve_output_weights_omit_temperature_factor() -> None:
+    """WHAM output weights remain base interface weights."""
+    config = repex_config()
+    config["current"]["size"] = 4
+    config["simulation"]["temperature_count"] = 2
+    config["simulation"]["temperature_exchange"] = "nve"
+    config["simulation"]["temperatures"] = [100.0, 200.0]
+    config["simulation"]["temperature_kb"] = 0.5
+    config["simulation"]["interfaces"] = [0.0, 1.0]
+    config["simulation"]["shooting_moves"] = ["sh", "sh"]
+    config["simulation"]["tis_set"] = {"lambda_minus_one": False}
+    state = REPEX_state(config, minus=True)
+    path = SimpleNamespace(
+        ordermax=(2.0, 0),
+        phasepoints=[
+            SimpleNamespace(etot=1.0),
+            SimpleNamespace(etot=3.0),
+        ],
+    )
+
+    swap_weights = state.path_weights(path, 0)
+    output_weights = state.output_path_weights(path, 0)
+
+    assert swap_weights[:2] == pytest.approx(
+        [0.9607894391523232, 0.9801986733067553]
+    )
+    assert output_weights[:2] == (1.0, 1.0)
+
+
+def test_temperature_output_writes_shared_paths_to_each_file(
+    tmp_path: PosixPath,
+) -> None:
+    """A path assigned to both temperatures is written to both data files."""
+    files = [tmp_path / "t0.txt", tmp_path / "t1.txt"]
+    for file in files:
+        file.write_text("", encoding="utf-8")
+    state = SimpleNamespace(
+        n=5,
+        _offset=2,
+        base_size=2,
+        temperature_count=2,
+        data_file=str(files[0]),
+        config={
+            "current": {"temperature_index": 0},
+            "output": {"data_files": [str(file) for file in files]},
+        },
+        traj_data={
+            7: {
+                "ens_save_idx": 0,
+                "frac": np.array([0.25, 0.0, 0.0, 0.75, 0.0]),
+                "length": 12,
+                "max_op": (1.5, 0),
+                "output_weights": (1.0, 1.0, 1.0, 1.0, 0.0),
+                "weights": (2.0, 2.0, 2.0, 2.0, 0.0),
+            }
+        },
+    )
+
+    write_to_pathens(state, [7])
+
+    assert "\t  7\t" in files[0].read_text(encoding="utf-8")
+    assert "\t  7\t" in files[1].read_text(encoding="utf-8")
+    assert state.traj_data == {}
 
 
 def repex_config():

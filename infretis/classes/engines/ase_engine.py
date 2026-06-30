@@ -114,6 +114,12 @@ class ASEEngine(EngineBase):
     def set_mdrun(self, md_items: Dict) -> None:
         """Set worker stuff if needed."""
         self.exe_dir = md_items["exe_dir"]
+        temperature = md_items.get("temperature")
+        if temperature is not None:
+            self.temperature = float(temperature)
+            self._beta = 1 / (self.temperature * self.kb)
+            if "temperature_K" in self.integrator_settings:
+                self.integrator_settings["temperature_K"] = self.temperature
 
     def _propagate_from(
         self,

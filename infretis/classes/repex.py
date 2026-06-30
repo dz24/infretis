@@ -75,6 +75,9 @@ class REPEX_state:
         self.temperature_count = config["simulation"].get(
             "temperature_count", 1
         )
+        self.temperature_exchange = config["simulation"].get(
+            "temperature_exchange", True
+        )
         self.base_size = config["current"].get("base_size", n)
         if minus:
             self._offset = self.temperature_count
@@ -218,21 +221,53 @@ class REPEX_state:
             return self.internal_ens(self.external_slot(0, temperature))
         return None
 
-    def expand_weights(self, weights):
-        """Expand base TIS weights over equal-temperature slots."""
-        if self.temperature_count == 1:
-            return weights
-        expanded = []
-        for weight in weights[:-1]:
-            expanded.extend([weight] * self.temperature_count)
-        expanded.append(weights[-1])
-        return tuple(expanded)
+    def temperature_beta(self, temperature):
+        """Return beta for a configured temperature layer."""
+        kb = self.config["simulation"].get("temperature_kb")
+        if kb is None:
+            engine_name = self.config.get("engine", {}).get("engine")
+            class_name = self.config.get("engine", {}).get("class")
+            if engine_name == "ase" or class_name == "ase":
+                kb = 8.61733326e-5
+            else:
+                raise ValueError(
+                    "Set simulation.temperature_kb when using "
+                    "temperature_exchange = 'nve' for this engine."
+                )
+            self.config["simulation"]["temperature_kb"] = kb
+        temp = self.config["simulation"]["temperatures"][temperature]
+        return 1.0 / (float(kb) * temp)
 
-    def path_weights(self, path, ens_num):
-        """Calculate path weights for the combined state."""
+    def path_energy(self, path):
+        """Return the conserved energy used for NVE temperature exchange."""
+        energies = [getattr(point, "etot", None) for point in path.phasepoints]
+        energies = np.array(
+            [energy for energy in energies if energy is not None],
+            dtype=float,
+        )
+        energies = energies[np.isfinite(energies)]
+        if energies.size == 0:
+            raise ValueError(
+                "temperature_exchange = 'nve' requires total energies "
+                "on all exchangeable paths."
+            )
+        return float(np.mean(energies))
+
+    def temperature_weight(self, path, temperature):
+        """Return the temperature part of the path weight."""
+        if self.temperature_exchange != "nve":
+            return 1.0
+        return float(
+            np.exp(
+                -self.temperature_beta(temperature) * self.path_energy(path)
+            )
+        )
+
+    def base_path_weights(self, path, ens_num):
+        """Calculate path/interface weights before temperature factors."""
         internal = self.internal_ens(ens_num)
         minus = self.slot_info(internal)[0] == 0
-        weights = calc_cv_vector(
+        return calc_cv_vector(
             path,
             self.config["simulation"]["interfaces"],
             self.mc_moves,
@@ -242,11 +277,74 @@ class REPEX_state:
             cap=self.cap,
             minus=minus,
         )
-        if not minus:
-            return self.expand_weights(weights)
+
+    def expand_weights(self, path, weights, temperature, output=False):
+        """Expand base TIS weights over temperature slots."""
         if self.temperature_count == 1:
             return weights
-        return tuple([weights[0]] * self.temperature_count)
+        expanded = [
+            0.0 for _ in range((len(weights) - 1) * self.temperature_count)
+        ]
+        for base_idx, weight in enumerate(weights[:-1]):
+            if output and self.temperature_exchange:
+                for temp_idx in range(self.temperature_count):
+                    expanded[
+                        base_idx * self.temperature_count + temp_idx
+                    ] = weight
+            elif self.temperature_exchange == "nve":
+                for temp_idx in range(self.temperature_count):
+                    expanded[
+                        base_idx * self.temperature_count + temp_idx
+                    ] = weight * self.temperature_weight(path, temp_idx)
+            elif self.temperature_exchange:
+                for temp_idx in range(self.temperature_count):
+                    expanded[
+                        base_idx * self.temperature_count + temp_idx
+                    ] = weight
+            else:
+                expanded[
+                    base_idx * self.temperature_count + temperature
+                ] = weight
+        expanded.append(weights[-1])
+        return tuple(expanded)
+
+    def path_weights(self, path, ens_num):
+        """Calculate path weights for the combined state."""
+        internal = self.internal_ens(ens_num)
+        minus = self.slot_info(internal)[0] == 0
+        weights = self.base_path_weights(path, ens_num)
+        if not minus:
+            temperature = self.slot_info(internal)[1]
+            return self.expand_weights(path, weights, temperature)
+        if self.temperature_count == 1:
+            return weights
+        if self.temperature_exchange:
+            return tuple(
+                [
+                    weights[0] * self.temperature_weight(path, temp_idx)
+                    for temp_idx in range(self.temperature_count)
+                ]
+            )
+        temperature = self.slot_info(internal)[1]
+        expanded = [0.0 for _ in range(self.temperature_count)]
+        expanded[temperature] = weights[0]
+        return tuple(expanded)
+
+    def output_path_weights(self, path, ens_num):
+        """Calculate base TIS weights for per-temperature output files."""
+        internal = self.internal_ens(ens_num)
+        temperature = self.slot_info(internal)[1]
+        weights = self.base_path_weights(path, ens_num)
+        minus = self.slot_info(internal)[0] == 0
+        if self.temperature_count == 1:
+            return weights
+        if not minus:
+            return self.expand_weights(path, weights, temperature, output=True)
+        if self.temperature_exchange:
+            return tuple([weights[0]] * self.temperature_count)
+        expanded = [0.0 for _ in range(self.temperature_count)]
+        expanded[temperature] = weights[0]
+        return tuple(expanded)
 
     def pick(self):
         """Pick path and ens."""
@@ -379,6 +477,9 @@ class REPEX_state:
         w_folder = os.path.join(os.getcwd(), f"worker{md_items['pin']}")
         make_dirs(w_folder)
         md_items["w_folder"] = w_folder
+        temperatures = self.config["simulation"].get("temperatures")
+        if temperatures is not None:
+            md_items["temperature"] = temperatures[temp]
 
         # Record ens_nums
         md_items["ens_nums"] = list(md_items["picked"].keys())
@@ -388,6 +489,10 @@ class REPEX_state:
         eng_names = []
         for ens_num in md_items["ens_nums"]:
             md_items["picked"][ens_num]["exe_dir"] = md_items["w_folder"]
+            if "temperature" in md_items:
+                md_items["picked"][ens_num]["temperature"] = md_items[
+                    "temperature"
+                ]
             if self.config["runner"].get("wmdrun", False):
                 md_items["picked"][ens_num]["wmdrun"] = self.config["runner"][
                     "wmdrun"
@@ -601,10 +706,34 @@ class REPEX_state:
 
     def inf_retis(self, input_mat, locks):
         """Permanent calculator."""
+        if self.temperature_count > 1 and not self.temperature_exchange:
+            return self.inf_retis_temperature_blocks(input_mat, locks)
+        return self.inf_retis_block(input_mat, locks, self._offset)
+
+    def inf_retis_temperature_blocks(self, input_mat, locks):
+        """Calculate independent swap matrices for each temperature layer."""
+        out = np.zeros_like(input_mat, dtype="longdouble")
+        terminal = self.n - 1
+        for temperature in range(self.temperature_count):
+            indices = [
+                idx
+                for idx in range(terminal)
+                if self.slot_info(idx)[1] == temperature
+            ]
+            if locks[terminal] == 0:
+                indices.append(terminal)
+            submat = input_mat[np.ix_(indices, indices)]
+            sublocks = locks[indices]
+            subprob = self.inf_retis_block(submat, sublocks, 1)
+            out[np.ix_(indices, indices)] = subprob
+        return out
+
+    def inf_retis_block(self, input_mat, locks, offset):
+        """Permanent calculator."""
         # Drop locked rows and columns
         bool_locks = locks == 1
         # get non_locked minus interfaces
-        offset = self._offset - sum(bool_locks[: self._offset])
+        offset = offset - sum(bool_locks[:offset])
         # make insert list
         i = 0
         insert_list = []
@@ -1094,6 +1223,9 @@ class REPEX_state:
                     "min_op": out_traj.ordermin,
                     "length": out_traj.length,
                     "weights": out_traj.weights,
+                    "output_weights": self.output_path_weights(
+                        out_traj, ens_num
+                    ),
                     "adress": out_traj.adress,
                     "ens_save_idx": ens_save_idx,
                 }
@@ -1166,6 +1298,10 @@ class REPEX_state:
 
         # write succ data to infretis_data.txt
         if md_items["status"] == "ACC":
+            if self.temperature_count > 1:
+                self.config["current"]["temperature_index"] = md_items[
+                    "temperature_index"
+                ]
             write_to_pathens(self, md_items["pnum_old"])
 
         self.sort_trajstate()
@@ -1203,6 +1339,7 @@ class REPEX_state:
                 "length": path.length,
                 "adress": path.adress,
                 "weights": path.weights,
+                "output_weights": self.output_path_weights(path, ens_num),
                 "frac": np.array(frac, dtype="longdouble"),
             }
             if (
@@ -1277,49 +1414,66 @@ def write_to_pathens(state, pn_archive):
     traj_data = state.traj_data
     size = state.n
 
+    def path_columns(pn, temp_idx=None):
+        weights = traj_data[pn].get("output_weights", traj_data[pn]["weights"])
+        if len(weights) == size:
+            full_weights = weights
+        elif len(weights) == state._offset:
+            full_weights = list(weights) + [
+                0.0 for _ in range(size - state._offset)
+            ]
+        elif len(weights) == 1:
+            full_weights = [0.0 for _ in range(size)]
+            full_weights[traj_data[pn]["ens_save_idx"]] = weights[0]
+        else:
+            full_weights = [0.0 for _ in range(state._offset)]
+            full_weights += list(weights)
+
+        frac_values = traj_data[pn]["frac"][:-1]
+        weight_values = full_weights[:-1]
+        if temp_idx is not None:
+            temp_columns = [temp_idx]
+            temp_columns += [
+                state._offset
+                + (base_ensemble - 1) * state.temperature_count
+                + temp_idx
+                for base_ensemble in range(1, state.base_size)
+            ]
+            frac_values = [frac_values[idx] for idx in temp_columns]
+            weight_values = [weight_values[idx] for idx in temp_columns]
+        return frac_values, weight_values
+
+    def path_line(pn, temp_idx=None):
+        frac_values, weight_values = path_columns(pn, temp_idx=temp_idx)
+        string = ""
+        string += f"\t{pn:3.0f}\t"
+        string += f"{traj_data[pn]['length']:5.0f}" + "\t"
+        string += f"{traj_data[pn]['max_op'][0]:8.5f}" + "\t"
+        frac = []
+        weight = []
+        for w0, f0 in zip(weight_values, frac_values):
+            frac.append("----" if f0 == 0.0 else str(f0))
+            weight.append("----" if f0 == 0.0 else str(w0))
+        return string + "\t".join(frac) + "\t" + "\t".join(weight) + "\t\n"
+
+    data_files = state.config["output"].get("data_files")
+    if state.temperature_count > 1 and data_files is not None:
+        for pn in pn_archive:
+            wrote = False
+            for temp_idx, data_file in enumerate(data_files):
+                frac_values, _ = path_columns(pn, temp_idx=temp_idx)
+                if np.any(np.array(frac_values, dtype="longdouble") != 0.0):
+                    with open(data_file, "a") as fp:
+                        fp.write(path_line(pn, temp_idx=temp_idx))
+                    wrote = True
+            if not wrote:
+                temp_idx = state.config["current"].get("temperature_index", 0)
+                with open(data_files[temp_idx], "a") as fp:
+                    fp.write(path_line(pn, temp_idx=temp_idx))
+            traj_data.pop(pn)
+        return
+
     with open(state.data_file, "a") as fp:
         for pn in pn_archive:
-            string = ""
-            string += f"\t{pn:3.0f}\t"
-            string += f"{traj_data[pn]['length']:5.0f}" + "\t"
-            string += f"{traj_data[pn]['max_op'][0]:8.5f}" + "\t"
-            weights = traj_data[pn]["weights"]
-            if len(weights) == size:
-                full_weights = weights
-            elif len(weights) == state._offset:
-                full_weights = list(weights) + [
-                    0.0 for _ in range(size - state._offset)
-                ]
-            elif len(weights) == 1:
-                full_weights = [0.0 for _ in range(size)]
-                full_weights[traj_data[pn]["ens_save_idx"]] = weights[0]
-            else:
-                full_weights = [0.0 for _ in range(state._offset)]
-                full_weights += list(weights)
-
-            frac_values = traj_data[pn]["frac"][:-1]
-            weight_values = full_weights[:-1]
-            if (
-                state.temperature_count > 1
-                and state.config["output"].get("data_files") is not None
-            ):
-                temp_idx = state.config["current"].get("temperature_index", 0)
-                temp_columns = [temp_idx]
-                temp_columns += [
-                    state._offset
-                    + (base_ensemble - 1) * state.temperature_count
-                    + temp_idx
-                    for base_ensemble in range(1, state.base_size)
-                ]
-                frac_values = [frac_values[idx] for idx in temp_columns]
-                weight_values = [weight_values[idx] for idx in temp_columns]
-
-            frac = []
-            weight = []
-            for w0, f0 in zip(weight_values, frac_values):
-                frac.append("----" if f0 == 0.0 else str(f0))
-                weight.append("----" if f0 == 0.0 else str(w0))
-            fp.write(
-                string + "\t".join(frac) + "\t" + "\t".join(weight) + "\t\n"
-            )
+            fp.write(path_line(pn))
             traj_data.pop(pn)
