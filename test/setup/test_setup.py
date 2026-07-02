@@ -8,6 +8,7 @@ from infretis.setup import (
     TOMLConfigError,
     check_config,
     setup_config,
+    setup_temperature_interfaces,
     setup_temperatures,
     write_header,
 )
@@ -86,11 +87,11 @@ def test_setup_temperatures_accepts_nve_exchange() -> None:
     """NVE temperature exchange is opt-in for distinct temperatures."""
     config = {
         "current": {
-            "active": [0, 1],
+            "active": [0, 1, 2],
             "frac": {},
             "locked": [],
-            "size": 2,
-            "traj_num": 2,
+            "size": 3,
+            "traj_num": 3,
         },
         "simulation": {
             "interfaces": [0.0, 1.0],
@@ -102,6 +103,35 @@ def test_setup_temperatures_accepts_nve_exchange() -> None:
     setup_temperatures(config)
 
     assert config["simulation"]["temperature_exchange"] == "nve"
+
+
+def test_setup_temperatures_accepts_interface_layers() -> None:
+    """Temperature layers may define different numbers of interfaces."""
+    config = {
+        "current": {
+            "active": [0, 1, 2],
+            "frac": {},
+            "locked": [],
+            "size": 3,
+            "traj_num": 3,
+        },
+        "simulation": {
+            "temperatures": [100.0, 200.0],
+            "interfaces_by_temperature": [
+                [0.0, 0.5, 1.0],
+                [0.0, 0.25, 0.5, 1.0],
+            ],
+        },
+    }
+
+    setup_temperature_interfaces(config)
+    setup_temperatures(config)
+
+    assert config["simulation"]["interfaces"] == [0.0, 0.5, 1.0]
+    assert config["current"]["base_size"] == 4
+    assert config["current"]["base_sizes"] == [3, 4]
+    assert config["current"]["size"] == 7
+    assert config["current"]["active"] == list(range(7))
 
 
 def set_nested_value(d, keys, value):

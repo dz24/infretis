@@ -109,6 +109,8 @@ def setup_config(
         msg = f"Restart file '{re_inp}' found, but its not the run file!"
         raise ValueError(msg)
 
+    setup_temperature_interfaces(config)
+
     # in case we restart, toml file has a 'current' subdict.
     if "current" in config:
         curr = config["current"]
@@ -236,11 +238,22 @@ def setup_temperatures(config: dict) -> None:
         return
 
     current = config["current"]
-    base_size = current.setdefault(
-        "base_size", len(config["simulation"]["interfaces"])
-    )
-    expanded_size = base_size * ntemps
-    if current.get("size") == base_size:
+    interface_layers = config["simulation"].get("interfaces_by_temperature")
+    if interface_layers is not None:
+        base_sizes = [len(layer) for layer in interface_layers]
+        base_size = current.setdefault("base_size", max(base_sizes))
+        current["base_sizes"] = base_sizes
+        expanded_size = sum(base_sizes)
+    else:
+        base_size = current.setdefault(
+            "base_size", len(config["simulation"]["interfaces"])
+        )
+        expanded_size = base_size * ntemps
+
+    if current.get("size") in {
+        len(config["simulation"]["interfaces"]),
+        base_size,
+    }:
         current["size"] = expanded_size
         current["active"] = list(range(expanded_size))
         current["traj_num"] = expanded_size
@@ -250,12 +263,60 @@ def setup_temperatures(config: dict) -> None:
     current.setdefault("temperature_index", 0)
 
     ens_engs = config["simulation"].get("ensemble_engines")
+    if interface_layers is not None and ens_engs is not None:
+        if len(ens_engs) != expanded_size:
+            expanded_engs = []
+            for temperature in range(ntemps):
+                expanded_engs.append(ens_engs[0])
+            for base_ensemble in range(1, base_size):
+                for temperature, interfaces in enumerate(interface_layers):
+                    if base_ensemble < len(interfaces):
+                        source = min(base_ensemble, len(ens_engs) - 1)
+                        expanded_engs.append(ens_engs[source])
+            config["simulation"]["ensemble_engines"] = expanded_engs
+        return
+
     if ens_engs is not None and len(ens_engs) == base_size:
         expanded_engs = []
         expanded_engs.extend(ens_engs[0] for _ in range(ntemps))
         for ens_eng in ens_engs[1:]:
             expanded_engs.extend(ens_eng for _ in range(ntemps))
         config["simulation"]["ensemble_engines"] = expanded_engs
+
+
+def setup_temperature_interfaces(config: dict) -> None:
+    """Normalize optional per-temperature interface lists."""
+    simulation = config["simulation"]
+    interface_layers = simulation.get("interfaces_by_temperature")
+    if interface_layers is None:
+        return
+    temperatures = simulation.get("temperatures")
+    if temperatures is None:
+        raise TOMLConfigError(
+            "simulation.interfaces_by_temperature requires temperatures"
+        )
+    if len(interface_layers) != len(temperatures):
+        raise TOMLConfigError(
+            "simulation.interfaces_by_temperature must match temperatures"
+        )
+
+    normalized = []
+    for interfaces in interface_layers:
+        if not isinstance(interfaces, list) or len(interfaces) < 2:
+            raise TOMLConfigError(
+                "Each temperature interface list needs at least 2 values"
+            )
+        normalized.append([float(value) for value in interfaces])
+
+    first, last = normalized[0][0], normalized[0][-1]
+    for interfaces in normalized:
+        if interfaces[0] != first or interfaces[-1] != last:
+            raise TOMLConfigError(
+                "Temperature interface lists must share first and last values"
+            )
+
+    simulation["interfaces_by_temperature"] = normalized
+    simulation.setdefault("interfaces", normalized[0])
 
 
 def check_config(config: dict) -> None:
@@ -265,7 +326,12 @@ def check_config(config: dict) -> None:
         config: the configuration dictionary
     """
     intf = config["simulation"]["interfaces"]
-    n_ens = len(config["simulation"]["interfaces"])
+    interface_layers = config["simulation"].get("interfaces_by_temperature")
+    n_ens = (
+        max(len(layer) for layer in interface_layers)
+        if interface_layers is not None
+        else len(config["simulation"]["interfaces"])
+    )
     n_workers = config["runner"]["workers"]
     sh_moves = config["simulation"]["shooting_moves"]
     n_sh_moves = len(sh_moves)
@@ -302,6 +368,17 @@ def check_config(config: dict) -> None:
         raise TOMLConfigError(
             f"Interface_cap {intf_cap} < interface[-2]={intf[-2]}"
         )
+
+    if interface_layers is not None:
+        for interfaces in interface_layers:
+            if sorted(interfaces) != interfaces:
+                raise TOMLConfigError(
+                    "Your temperature interfaces are not sorted!"
+                )
+            if len(set(interfaces)) != len(interfaces):
+                raise TOMLConfigError(
+                    "Your temperature interfaces contain duplicate values!"
+                )
 
     # engine checks
     unique_engines = []
@@ -357,14 +434,18 @@ def write_header(config: dict) -> None:
         stems = [f"infretis_data_T{i:03d}" for i in range(len(temperatures))]
 
     data_files = []
-    for stem in stems:
+    interface_layers = config.get("simulation", {}).get(
+        "interfaces_by_temperature"
+    )
+    for idx, stem in enumerate(stems):
         data_file = next_data_file(data_dir, stem)
         data_files.append(data_file)
-        header_size = (
-            config["current"].get("base_size", size)
-            if temperatures is not None and len(temperatures) > 1
-            else size
-        )
+        if interface_layers is not None:
+            header_size = len(interface_layers[idx])
+        elif temperatures is not None and len(temperatures) > 1:
+            header_size = config["current"].get("base_size", size)
+        else:
+            header_size = size
         write_data_header(data_file, header_size)
 
     config["output"]["data_file"] = data_files[0]

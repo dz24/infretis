@@ -9,6 +9,11 @@ import numpy as np
 import tomli_w
 from numpy.random import default_rng
 
+try:
+    from numba import njit
+except ImportError:  # pragma: no cover - optional acceleration
+    njit = None
+
 from infretis.classes.engines.factory import assign_engines
 from infretis.classes.formatter import PathStorage
 from infretis.core.core import make_dirs
@@ -17,6 +22,115 @@ from infretis.core.tis import calc_cv_vector
 logger = logging.getLogger("main")  # pylint: disable=invalid-name
 logger.addHandler(logging.NullHandler())
 DATE_FORMAT = "%Y.%m.%d %H:%M:%S"
+
+
+if njit is not None:
+
+    @njit(cache=True)
+    def _random_matching_counts(arr, assignment, row0s, row1s, rands):
+        """Sample matching counts for a W matrix."""
+        nsamples = len(row0s)
+        size = len(assignment)
+        out = np.zeros((size, size), dtype=np.float64)
+
+        for sample in range(nsamples):
+            row0 = row0s[sample]
+            row1 = row1s[sample]
+            col0 = assignment[row0]
+            col1 = assignment[row1]
+            old = arr[row0, col0] * arr[row1, col1]
+            new = arr[row0, col1] * arr[row1, col0]
+            if new > 0.0 and (new >= old or rands[sample] < new / old):
+                assignment[row0] = col1
+                assignment[row1] = col0
+
+            for row in range(size):
+                out[row, assignment[row]] += 1.0
+
+        return out
+
+    @njit(cache=True)
+    def _random_adjacent_counts(
+        prob_left, prob_right, directions, starts, rands
+    ):
+        """Sample adjacent swap counts for a block W matrix."""
+        nsamples = len(directions)
+        size = len(prob_left)
+        choices = rands.shape[1]
+        row_for_col = np.arange(size)
+        out = np.eye(size, dtype=np.float64)
+
+        for sample in range(nsamples):
+            direction = directions[sample]
+            start = starts[sample]
+
+            for choice in range(choices):
+                idx = choice * 2 + start
+                if direction == -1:
+                    if idx >= size - 1:
+                        break
+                    other = idx - 1
+                    if other < 0:
+                        other = size - 1
+                    prob = (
+                        prob_left[row_for_col[idx], idx]
+                        * prob_right[row_for_col[other], other]
+                    )
+                else:
+                    other = idx + 1
+                    if other >= size:
+                        break
+                    prob = (
+                        prob_right[row_for_col[idx], idx]
+                        * prob_left[row_for_col[other], other]
+                    )
+                if rands[sample, choice] < prob:
+                    row0 = row_for_col[idx]
+                    row_for_col[idx] = row_for_col[other]
+                    row_for_col[other] = row0
+
+            for col in range(size):
+                out[row_for_col[col], col] += 1.0
+
+        return out
+
+    @njit(cache=True)
+    def _fast_glynn_perm64(M):
+        """Float64 Glynn permanent for larger exact swap subblocks."""
+        row_comb = np.zeros(len(M), dtype=np.float64)
+        for row in range(len(M)):
+            for col in range(len(M)):
+                row_comb[col] += M[row, col]
+
+        total = 0.0
+        old_grey = 0
+        sign = 1.0
+        num_loops = 2 ** (len(M) - 1)
+
+        for bin_index in range(1, num_loops + 1):
+            prod = 1.0
+            for value in row_comb:
+                prod *= value
+            total += sign * prod
+
+            new_grey = bin_index ^ (bin_index // 2)
+            grey_diff = old_grey ^ new_grey
+            grey_diff_index = 0
+            while 2**grey_diff_index != grey_diff:
+                grey_diff_index += 1
+            direction = 2.0 if old_grey > new_grey else -2.0
+            for col in range(len(M)):
+                row_comb[col] += M[grey_diff_index, col] * direction
+
+            sign = -sign
+            old_grey = new_grey
+
+        return total / num_loops
+
+else:
+    _random_matching_counts = None
+    _random_adjacent_counts = None
+    _fast_glynn_perm64 = None
 
 
 def spawn_rng(rgen):
@@ -78,7 +192,12 @@ class REPEX_state:
         self.temperature_exchange = config["simulation"].get(
             "temperature_exchange", True
         )
+        self.temperature_interfaces = config["simulation"].get(
+            "interfaces_by_temperature"
+        )
         self.base_size = config["current"].get("base_size", n)
+        self._slot_to_info = None
+        self._info_to_slot = None
         if minus:
             self._offset = self.temperature_count
             n += 1 if self.temperature_count > 1 else int(minus)
@@ -86,6 +205,7 @@ class REPEX_state:
             self._offset = 0
 
         self.n = n
+        self.setup_temperature_slots()
         self.state = np.zeros(shape=(n, n))
         self._locks = np.ones(shape=n)
         self._last_prob = None
@@ -93,6 +213,9 @@ class REPEX_state:
         self._trajs = [""] * n
         self.zeroswap = config["simulation"]["zeroswap"]
         self.pick_scheme = config["simulation"]["pick_scheme"]
+        self.random_swap_samples = config["simulation"].get(
+            "random_swap_samples", 10_000
+        )
 
         # detect any locked ens-path pairs exist pre start
         self.locked0 = list(self.config["current"].get("locked", []))
@@ -186,11 +309,35 @@ class REPEX_state:
         """Convert an external ensemble number to a state index."""
         return int(ens_num + self._offset)
 
+    def setup_temperature_slots(self):
+        """Build state-index mappings for ragged temperature layers."""
+        if self.temperature_count == 1 or self.temperature_interfaces is None:
+            return
+        slots = []
+        for temperature in range(self.temperature_count):
+            slots.append((0, temperature))
+        self.base_size = max(
+            len(layer) for layer in self.temperature_interfaces
+        )
+        for base_ensemble in range(1, self.base_size):
+            for temperature, interfaces in enumerate(
+                self.temperature_interfaces
+            ):
+                if base_ensemble < len(interfaces):
+                    slots.append((base_ensemble, temperature))
+        self._slot_to_info = slots
+        self._info_to_slot = {
+            (base_ensemble, temperature): idx
+            for idx, (base_ensemble, temperature) in enumerate(slots)
+        }
+
     def slot_info(self, internal):
         """Return ``(base_ensemble, temperature)`` for a state index."""
         internal = int(internal)
         if self.temperature_count == 1:
             return internal, 0
+        if self._slot_to_info is not None:
+            return self._slot_to_info[internal]
         if internal < self._offset:
             return 0, internal
         positive = internal - self._offset
@@ -202,6 +349,10 @@ class REPEX_state:
         """Return the external ensemble number for a base/temp slot."""
         if self.temperature_count == 1:
             return base_ensemble - self._offset
+        if self._info_to_slot is not None:
+            return (
+                self._info_to_slot[(base_ensemble, temperature)] - self._offset
+            )
         if base_ensemble == 0:
             internal = temperature
         else:
@@ -211,6 +362,12 @@ class REPEX_state:
                 + temperature
             )
         return internal - self._offset
+
+    def interfaces_for_temperature(self, temperature):
+        """Return the interface list for a temperature layer."""
+        if self.temperature_interfaces is None:
+            return self.config["simulation"]["interfaces"]
+        return self.temperature_interfaces[temperature]
 
     def zero_swap_partner(self, internal):
         """Return the paired 0-/0+ state index, if this is a zero slot."""
@@ -266,10 +423,11 @@ class REPEX_state:
     def base_path_weights(self, path, ens_num):
         """Calculate path/interface weights before temperature factors."""
         internal = self.internal_ens(ens_num)
-        minus = self.slot_info(internal)[0] == 0
+        base_ensemble, temperature = self.slot_info(internal)
+        minus = base_ensemble == 0
         return calc_cv_vector(
             path,
-            self.config["simulation"]["interfaces"],
+            self.interfaces_for_temperature(temperature),
             self.mc_moves,
             lambda_minus_one=self.config["simulation"]["tis_set"][
                 "lambda_minus_one"
@@ -308,6 +466,42 @@ class REPEX_state:
         expanded.append(weights[-1])
         return tuple(expanded)
 
+    def expand_temperature_interface_weights(
+        self, path, source_temperature, output=False
+    ):
+        """Calculate weights for ragged per-temperature interface layers."""
+        expanded = [0.0 for _ in range(self.n - self._offset)]
+        if self.temperature_exchange:
+            temperatures = range(self.temperature_count)
+        else:
+            temperatures = [source_temperature]
+
+        terminal = 0.0
+        for temperature in temperatures:
+            weights = calc_cv_vector(
+                path,
+                self.interfaces_for_temperature(temperature),
+                self.mc_moves,
+                lambda_minus_one=self.config["simulation"]["tis_set"][
+                    "lambda_minus_one"
+                ],
+                cap=self.cap,
+                minus=False,
+            )
+            factor = (
+                self.temperature_weight(path, temperature)
+                if self.temperature_exchange == "nve" and not output
+                else 1.0
+            )
+            for base_idx, weight in enumerate(weights[:-1]):
+                base_ensemble = base_idx + 1
+                internal = self._info_to_slot.get((base_ensemble, temperature))
+                if internal is not None:
+                    expanded[internal - self._offset] = weight * factor
+            terminal = max(terminal, weights[-1])
+        expanded[-1] = terminal
+        return tuple(expanded)
+
     def path_weights(self, path, ens_num):
         """Calculate path weights for the combined state."""
         internal = self.internal_ens(ens_num)
@@ -315,6 +509,10 @@ class REPEX_state:
         weights = self.base_path_weights(path, ens_num)
         if not minus:
             temperature = self.slot_info(internal)[1]
+            if self.temperature_interfaces is not None:
+                return self.expand_temperature_interface_weights(
+                    path, temperature
+                )
             return self.expand_weights(path, weights, temperature)
         if self.temperature_count == 1:
             return weights
@@ -339,6 +537,10 @@ class REPEX_state:
         if self.temperature_count == 1:
             return weights
         if not minus:
+            if self.temperature_interfaces is not None:
+                return self.expand_temperature_interface_weights(
+                    path, temperature, output=True
+                )
             return self.expand_weights(path, weights, temperature, output=True)
         if self.temperature_exchange:
             return tuple([weights[0]] * self.temperature_count)
@@ -554,10 +756,11 @@ class REPEX_state:
             )
             cap = self.cap if self.cap is not None else self.interfaces[-1]
             if ens > 0:
+                ens_interfaces = self.ensembles[ens]["interfaces"]
                 raise_msg += (
                     f"Path {traj.path_number} has max_op {traj.ordermax[0]}"
                     f" and does not have any phase points "
-                    f"between {self.interfaces[ens-1]} and {cap}.\n"
+                    f"between {ens_interfaces[1]} and {cap}.\n"
                 )
 
             raise ValueError(raise_msg)
@@ -706,9 +909,43 @@ class REPEX_state:
 
     def inf_retis(self, input_mat, locks):
         """Permanent calculator."""
+        if (
+            self.temperature_interfaces is not None
+            and self.temperature_exchange
+        ):
+            return self.inf_retis_general(input_mat, locks)
         if self.temperature_count > 1 and not self.temperature_exchange:
             return self.inf_retis_temperature_blocks(input_mat, locks)
         return self.inf_retis_block(input_mat, locks, self._offset)
+
+    def inf_retis_general(self, input_mat, locks):
+        """Permanent calculator for non-contiguous W matrices."""
+        bool_locks = locks == 1
+        insert_list = []
+        i = 0
+        for lock in bool_locks:
+            if lock:
+                insert_list.append(i)
+            else:
+                i += 1
+
+        non_locked = input_mat[~bool_locks, :][:, ~bool_locks]
+        if len(non_locked) == 0:
+            out = non_locked
+        elif len(non_locked) <= 8:
+            out = self.permanent_prob(non_locked)
+        else:
+            self._random_count += 1
+            out = self.random_matching_prob(
+                non_locked, n=self.random_swap_samples
+            )
+
+        out[np.where(np.abs(out) < 1e-15)] = 0
+        if np.sum(out < 0) > 0:
+            out[out < 0] = 0
+
+        final_out_rows = np.insert(out, insert_list, 0, axis=0)
+        return np.insert(final_out_rows, insert_list, 0, axis=1)
 
     def inf_retis_temperature_blocks(self, input_mat, locks):
         """Calculate independent swap matrices for each temperature layer."""
@@ -823,13 +1060,12 @@ class REPEX_state:
                     out[start:stop, cstart:cstop:direction] = temp
                 else:
                     self._random_count += 1
-                    # TODO DEBUG PRINTS
-                    print(
+                    logger.debug(
                         f"random #{self._random_count}, "
                         f"dims = {len(subarr)}"
                     )
                     # do n random parallel samples
-                    temp = self.random_prob(subarr)
+                    temp = self.random_prob(subarr, n=self.random_swap_samples)
                     out[start:stop, cstart:cstop:direction] = temp
 
         out[sort_idx] = out.copy()  # COPY REQUIRED TO NOT BRAKE STATE!!!
@@ -910,22 +1146,101 @@ class REPEX_state:
                     continue
                 columns = [r for r in range(n) if r != j]
                 M = sub_arr[:, columns]
-                f = self.fast_glynn_perm(M)
+                if _fast_glynn_perm64 is not None and n > 8:
+                    f = _fast_glynn_perm64(M.astype(np.float64))
+                else:
+                    f = self.fast_glynn_perm(M)
                 out[i][j] = f * scaled_arr[i][j]
         return out / max(np.sum(out, axis=1))
 
+    def initial_matching(self, arr):
+        """Find one valid row-column matching for a sparse W matrix."""
+        n = len(arr)
+        row_for_col = [-1 for _ in range(n)]
+
+        def assign(row, seen):
+            for col in np.flatnonzero(arr[row]):
+                if seen[col]:
+                    continue
+                seen[col] = True
+                if row_for_col[col] == -1 or assign(row_for_col[col], seen):
+                    row_for_col[col] = row
+                    return True
+            return False
+
+        for row in range(n):
+            if not assign(row, [False for _ in range(n)]):
+                raise ValueError(
+                    "No valid matching in replica-exchange matrix"
+                )
+
+        matching = np.zeros(n, dtype=int)
+        for col, row in enumerate(row_for_col):
+            matching[row] = col
+        return matching
+
+    def random_matching_prob(self, arr, n=10_000):
+        """Sample matching marginals for a general W matrix."""
+        size = len(arr)
+        assignment = self.initial_matching(arr)
+
+        if _random_matching_counts is not None and size > 1:
+            row0s = self.rgen.integers(0, size, size=n, dtype=np.int64)
+            row1s = self.rgen.integers(0, size - 1, size=n, dtype=np.int64)
+            row1s += row1s >= row0s
+            rands = self.rgen.random(n)
+            out = _random_matching_counts(
+                arr.astype(np.float64),
+                assignment.astype(np.int64),
+                row0s,
+                row1s,
+                rands,
+            )
+            return out.astype("longdouble") / n
+
+        rows = np.arange(size)
+        out = np.zeros(shape=arr.shape, dtype="longdouble")
+
+        for _ in range(n):
+            row0, row1 = self.rgen.choice(size, size=2, replace=False)
+            col0, col1 = assignment[row0], assignment[row1]
+            old = arr[row0, col0] * arr[row1, col1]
+            new = arr[row0, col1] * arr[row1, col0]
+            if new > 0 and (new >= old or self.rgen.random() < new / old):
+                assignment[row0], assignment[row1] = col1, col0
+            out[rows, assignment] += 1
+
+        return out / n
+
     def random_prob(self, arr, n=10_000):
         """P matrix calculation for specific W matrix."""
+        with np.errstate(divide="ignore", invalid="ignore"):
+            prob_right = np.nan_to_num(np.roll(arr, -1, axis=1) / arr)
+            prob_left = np.nan_to_num(np.roll(arr, 1, axis=1) / arr)
+
+        choices = len(arr) // 2
+        if _random_adjacent_counts is not None and choices > 0:
+            directions = self.rgen.choice(
+                np.array([1, -1], dtype=np.int64), size=n
+            )
+            even = choices * 2 == len(arr)
+            if even:
+                starts = np.zeros(n, dtype=np.int64)
+            else:
+                starts = self.rgen.integers(0, 2, size=n, dtype=np.int64)
+            rands = self.rgen.random((n, choices))
+            out = _random_adjacent_counts(
+                prob_left.astype(np.float64),
+                prob_right.astype(np.float64),
+                directions,
+                starts,
+                rands,
+            )
+            return out.astype("longdouble") / (n + 1)
+
         out = np.eye(len(arr), dtype="longdouble")
         current_state = np.eye(len(arr))
-        choices = len(arr) // 2
         even = choices * 2 == len(arr)
-
-        # The probability to go right
-        prob_right = np.nan_to_num(np.roll(arr, -1, axis=1) / arr)
-
-        # The probability to go left
-        prob_left = np.nan_to_num(np.roll(arr, 1, axis=1) / arr)
 
         start = 0
         zero_one = np.array([0, 1])
@@ -1256,9 +1571,14 @@ class REPEX_state:
                                 )
                                 if os.path.isfile(txt_adress):
                                     os.remove(txt_adress)
-                            os.rmdir(
-                                os.path.join(load_dir, pn_old_del, "accepted")
-                            )
+                            try:
+                                os.rmdir(
+                                    os.path.join(
+                                        load_dir, pn_old_del, "accepted"
+                                    )
+                                )
+                            except OSError:
+                                continue
                             os.rmdir(os.path.join(load_dir, pn_old_del))
                         # pop the deleted path.
                         self.pn_olds.pop(pn_old_del)
@@ -1351,44 +1671,62 @@ class REPEX_state:
 
     def initiate_ensembles(self):
         """Create all the ensemble dicts from the *toml config dict."""
-        intfs = self.config["simulation"]["interfaces"]
         lambda_minus_one = self.config["simulation"]["tis_set"][
             "lambda_minus_one"
         ]
-        ens_intfs = []
 
-        # set intfs for [0-] and [0+]
-        if lambda_minus_one is not False:
-            ens_intfs.append(
-                [lambda_minus_one, (lambda_minus_one + intfs[0]) / 2, intfs[0]]
-            )
-        else:
-            ens_intfs.append([float("-inf"), intfs[0], intfs[0]])
-        ens_intfs.append([intfs[0], intfs[0], intfs[-1]])
+        def make_pensembles(intfs):
+            ens_intfs = []
+            if lambda_minus_one is not False:
+                ens_intfs.append(
+                    [
+                        lambda_minus_one,
+                        (lambda_minus_one + intfs[0]) / 2,
+                        intfs[0],
+                    ]
+                )
+            else:
+                ens_intfs.append([float("-inf"), intfs[0], intfs[0]])
+            ens_intfs.append([intfs[0], intfs[0], intfs[-1]])
 
-        # set interfaces and set detect for [1+], [2+], ...
-        reactant, product = intfs[0], intfs[-1]
-        for i in range(len(intfs) - 2):
-            middle = intfs[i + 1]
-            ens_intfs.append([reactant, middle, product])
+            reactant, product = intfs[0], intfs[-1]
+            for i in range(len(intfs) - 2):
+                middle = intfs[i + 1]
+                ens_intfs.append([reactant, middle, product])
 
-        # create all path ensembles
-        pensembles = {}
-        for i, ens_intf in enumerate(ens_intfs):
-            pensembles[i] = {
-                "interfaces": tuple(ens_intf),
-                "tis_set": self.config["simulation"]["tis_set"],
-                "mc_move": self.config["simulation"]["shooting_moves"][i],
-                "ens_name": f"{i:03d}",
-                "start_cond": (
-                    ["L", "R"]
-                    if lambda_minus_one is not False and i == 0
-                    else ("R" if i == 0 else "L")
-                ),
-            }
+            pensembles = {}
+            for i, ens_intf in enumerate(ens_intfs):
+                pensembles[i] = {
+                    "interfaces": tuple(ens_intf),
+                    "tis_set": self.config["simulation"]["tis_set"],
+                    "mc_move": self.config["simulation"]["shooting_moves"][i],
+                    "ens_name": f"{i:03d}",
+                    "start_cond": (
+                        ["L", "R"]
+                        if lambda_minus_one is not False and i == 0
+                        else ("R" if i == 0 else "L")
+                    ),
+                }
+            return pensembles
+
+        intfs = self.config["simulation"]["interfaces"]
+        pensembles = make_pensembles(intfs)
 
         if self.temperature_count == 1:
             self.ensembles = pensembles
+            return
+
+        if self.temperature_interfaces is not None:
+            by_temperature = [
+                make_pensembles(intfs) for intfs in self.temperature_interfaces
+            ]
+            self.ensembles = {}
+            for internal, (base_ensemble, temperature) in enumerate(
+                self._slot_to_info
+            ):
+                ens = by_temperature[temperature][base_ensemble].copy()
+                ens["ens_name"] = self.state_label(internal)
+                self.ensembles[internal] = ens
             return
 
         expanded = {}
@@ -1432,13 +1770,20 @@ def write_to_pathens(state, pn_archive):
         frac_values = traj_data[pn]["frac"][:-1]
         weight_values = full_weights[:-1]
         if temp_idx is not None:
-            temp_columns = [temp_idx]
-            temp_columns += [
-                state._offset
-                + (base_ensemble - 1) * state.temperature_count
-                + temp_idx
-                for base_ensemble in range(1, state.base_size)
-            ]
+            if getattr(state, "_slot_to_info", None) is not None:
+                temp_columns = [
+                    idx
+                    for idx, slot_info in enumerate(state._slot_to_info)
+                    if slot_info[1] == temp_idx
+                ]
+            else:
+                temp_columns = [temp_idx]
+                temp_columns += [
+                    state._offset
+                    + (base_ensemble - 1) * state.temperature_count
+                    + temp_idx
+                    for base_ensemble in range(1, state.base_size)
+                ]
             frac_values = [frac_values[idx] for idx in temp_columns]
             weight_values = [weight_values[idx] for idx in temp_columns]
         return frac_values, weight_values

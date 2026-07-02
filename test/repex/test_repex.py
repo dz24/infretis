@@ -168,6 +168,126 @@ def test_temperature_output_writes_shared_paths_to_each_file(
     assert state.traj_data == {}
 
 
+def test_ragged_temperature_interface_slots() -> None:
+    """Per-temperature interface lists create a ragged 2D state."""
+    config = repex_config()
+    config["current"]["size"] = 7
+    config["current"]["base_size"] = 4
+    config["simulation"]["temperature_count"] = 2
+    config["simulation"]["temperature_exchange"] = False
+    config["simulation"]["interfaces"] = [0.0, 0.5, 1.0]
+    config["simulation"]["interfaces_by_temperature"] = [
+        [0.0, 0.5, 1.0],
+        [0.0, 0.25, 0.5, 1.0],
+    ]
+    state = REPEX_state(config, minus=True)
+
+    labels = [state.state_label(idx) for idx in range(state.n - 1)]
+
+    assert labels == [
+        "000_t0",
+        "000_t1",
+        "001_t0",
+        "001_t1",
+        "002_t0",
+        "002_t1",
+        "003_t1",
+    ]
+    assert state.external_slot(3, 1) == 4
+
+
+def test_ragged_temperature_output_columns(tmp_path: PosixPath) -> None:
+    """Per-temperature output files use their layer's own columns."""
+    files = [tmp_path / "t0.txt", tmp_path / "t1.txt"]
+    for file in files:
+        file.write_text("", encoding="utf-8")
+    state = SimpleNamespace(
+        n=8,
+        _offset=2,
+        base_size=4,
+        temperature_count=2,
+        _slot_to_info=[
+            (0, 0),
+            (0, 1),
+            (1, 0),
+            (1, 1),
+            (2, 0),
+            (2, 1),
+            (3, 1),
+        ],
+        data_file=str(files[0]),
+        config={
+            "current": {"temperature_index": 0},
+            "output": {"data_files": [str(file) for file in files]},
+        },
+        traj_data={
+            7: {
+                "ens_save_idx": 0,
+                "frac": np.array([0.1, 0.0, 0.2, 0.0, 0.3, 0.0, 0.0, 0.0]),
+                "length": 12,
+                "max_op": (1.5, 0),
+                "output_weights": (1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+                "weights": (1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+            },
+            8: {
+                "ens_save_idx": 1,
+                "frac": np.array([0.0, 0.1, 0.0, 0.2, 0.0, 0.3, 0.4, 0.0]),
+                "length": 12,
+                "max_op": (1.5, 0),
+                "output_weights": (1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+                "weights": (1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+            },
+        },
+    )
+
+    write_to_pathens(state, [7, 8])
+
+    t0_text = files[0].read_text(encoding="utf-8")
+    t1_text = files[1].read_text(encoding="utf-8")
+    assert "\t  7\t" in t0_text
+    assert "\t  8\t" not in t0_text
+    assert "\t  7\t" not in t1_text
+    assert "\t  8\t" in t1_text
+
+
+def test_random_matching_prob_is_doubly_stochastic() -> None:
+    """Sampled matching probabilities preserve row/column sums."""
+    config = repex_config()
+    config["current"]["size"] = 6
+    state = REPEX_state(config)
+    arr = np.array(
+        [
+            [1.0, 2.0, 0.0, 0.0, 0.0, 0.0],
+            [3.0, 1.0, 2.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 3.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 2.0, 2.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0, 2.0, 3.0],
+            [0.0, 0.0, 0.0, 0.0, 1.0, 2.0],
+        ]
+    )
+
+    prob = state.random_matching_prob(arr, n=200)
+
+    assert prob.shape == arr.shape
+    assert np.allclose(prob.sum(axis=0), 1)
+    assert np.allclose(prob.sum(axis=1), 1)
+    assert np.all(prob[arr == 0] == 0)
+
+
+def test_random_prob_is_doubly_stochastic() -> None:
+    """Adjacent sampled probabilities preserve row/column sums."""
+    config = repex_config()
+    config["current"]["size"] = 6
+    state = REPEX_state(config)
+    arr = np.tril(np.ones((6, 6)))
+
+    prob = state.random_prob(arr, n=200)
+
+    assert prob.shape == arr.shape
+    assert np.allclose(prob.sum(axis=0), 1)
+    assert np.allclose(prob.sum(axis=1), 1)
+
+
 def repex_config():
     """Small REPEX config."""
     return {
