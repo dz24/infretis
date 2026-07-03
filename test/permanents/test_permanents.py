@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 
+import infretis.classes.repex as repex
 from infretis.classes.repex import REPEX_state
 
 W_MATRIX1 = np.array(
@@ -70,16 +71,80 @@ PERMANENT2 = 10508395762604.0
 PERMANENT3 = -4.456605869717995727e+25
 
 
-def test_matrix1():
-    """Test ..."""
-    state = REPEX_state(
+def _make_state():
+    return REPEX_state(
         {
             "current": {"size": 1, "cstep": 0},
             "runner": {"workers": 1},
-            "simulation": {"seed": 0, "steps":10,
-                           "zeroswap": 0.5, "pick_scheme": 0},
+            "simulation": {
+                "seed": 0,
+                "steps": 10,
+                "zeroswap": 0.5,
+                "pick_scheme": 0,
+            },
         }
     )
+
+
+def _permanent_prob_numba_result(arr):
+    return repex._permanent_prob_numba(
+        np.asarray(arr, dtype=np.float64)
+    ).astype(np.longdouble)
+
+
+@pytest.mark.skipif(
+    repex._permanent_prob_numba is None, reason="numba is not available"
+)
+@pytest.mark.parametrize(
+    "w_matrix",
+    [
+        W_MATRIX1,
+        W_MATRIX2,
+        np.array(
+            [
+                [45, 48, 65],
+                [68, 68, 10],
+                [84, 22, 37],
+            ],
+            dtype=np.float64,
+        ),
+        np.array(
+            [
+                [88, 71, 89, 89, 13, 59],
+                [66, 40, 88, 47, 89, 82],
+                [38, 26, 78, 73, 10, 21],
+                [81, 70, 80, 48, 65, 83],
+                [89, 50, 30, 20, 20, 15],
+                [40, 33, 66, 10, 58, 33],
+            ],
+            dtype=np.float64,
+        ),
+    ],
+)
+def test_numba_permanent_prob_matches_pre_numba(w_matrix):
+    """Compare the numba permanent kernel with the Python path."""
+    pre_numba = _make_state().permanent_prob(w_matrix)
+    numba = _permanent_prob_numba_result(w_matrix)
+
+    np.testing.assert_allclose(
+        np.asarray(numba, dtype=np.float64),
+        np.asarray(pre_numba, dtype=np.float64),
+        rtol=1e-12,
+        atol=1e-14,
+    )
+
+
+def test_inf_retis_uses_permanent_prob_for_small_blocks():
+    """Check inf_retis exact-block dispatch on a known matrix."""
+    p_matrix = _make_state().inf_retis(
+        W_MATRIX2, np.zeros(W_MATRIX2.shape[0])
+    )
+    assert pytest.approx(p_matrix) == P_MATRIX2
+
+
+def test_matrix1():
+    """Test ..."""
+    state = _make_state()
     p_matrix = state.permanent_prob(W_MATRIX1)
     permanent = state.fast_glynn_perm(W_MATRIX1)
     assert pytest.approx(p_matrix) == P_MATRIX1
@@ -88,21 +153,14 @@ def test_matrix1():
 
 def test_matrix2():
     """Test ..."""
-    state = REPEX_state(
-        {
-            "current": {"size": 1, "cstep": 0},
-            "runner": {"workers": 1},
-            "simulation": {"seed": 0, "steps":10,
-                           "zeroswap": 0.5, "pick_scheme": 0},
-        }
-    )
+    state = _make_state()
     p_matrix = state.permanent_prob(W_MATRIX2)
     permanent = state.fast_glynn_perm(W_MATRIX2)
     assert pytest.approx(p_matrix) == P_MATRIX2
     assert permanent == PERMANENT2
 
 
-def test_matrix3(caplog):
+def test_matrix3(caplog, monkeypatch):
     """This w matrix technically give negative number in the p matrix.
      But we check here that no zeros are present.
 
@@ -117,6 +175,7 @@ def test_matrix3(caplog):
         },
         minus=True
     )
+    monkeypatch.setattr(repex, "_USE_NUMBA", False)
     locks = np.zeros(W_MATRIX3.shape[0])
     with caplog.at_level(logging.INFO):
         # this versions makes negative numbers zero
