@@ -25,6 +25,7 @@ interfaces = [
 steps = 10
 seed = 0
 load_dir = "load"
+numba = false
 shooting_moves = [
     "sh",
     "sh",

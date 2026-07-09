@@ -5,6 +5,7 @@ from pathlib import Path, PosixPath
 import pytest
 
 from infretis.setup import (
+    NUMBA_AVAILABLE,
     TOMLConfigError,
     check_config,
     setup_config,
@@ -46,7 +47,7 @@ def test_check_config():
     toml_path = (
         Path(__file__).parent / "../../examples/gromacs/H2/infretis.toml"
     )
-    original_config = setup_config(toml_path)
+    original_config = setup_config(toml_path, re_inp=toml_path)
     test_cases = [
         (["runner", "workers"], 100),
         (["simulation", "tis_set", "interface_cap"], 100),
@@ -66,7 +67,7 @@ def test_multi_engine_config():
     toml_path = (
         Path(__file__).parent / "../../examples/gromacs/H2/infretis.toml"
     )
-    original_config = setup_config(toml_path)
+    original_config = setup_config(toml_path, re_inp=toml_path)
     original_config["simulation"]["tis_set"]["multi_engine"] = True
     original_config["engine0"] = original_config["engine"].copy()
     original_config["engine1"] = original_config["engine"].copy()
@@ -80,3 +81,11 @@ def test_multi_engine_config():
         print("Testing:", keys, invalid_value)
         with pytest.raises(TOMLConfigError):
             check_config(config)
+
+
+def test_numba_default():
+    toml_path = (
+        Path(__file__).parent / "../../examples/gromacs/H2/infretis.toml"
+    )
+    config = setup_config(toml_path, re_inp=toml_path)
+    assert config["simulation"]["numba"] is NUMBA_AVAILABLE

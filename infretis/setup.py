@@ -10,7 +10,7 @@ from infretis.asyncrunner import aiorunner, future_list
 from infretis.classes.engines.factory import create_engines
 from infretis.classes.formatter import get_log_formatter
 from infretis.classes.path import load_paths_from_disk
-from infretis.classes.repex import REPEX_state
+from infretis.classes.repex import NUMBA_AVAILABLE, REPEX_state
 from infretis.core.tis import run_md
 
 logger = logging.getLogger("main")
@@ -159,6 +159,7 @@ def setup_config(
     config["simulation"].setdefault("load_dir", "load")
     config["simulation"].setdefault("zeroswap", 0.5)
     config["simulation"].setdefault("pick_scheme", 0)
+    config["simulation"].setdefault("numba", NUMBA_AVAILABLE)
 
     # [simulation.tis_set] defaults
     config["simulation"]["tis_set"].setdefault("quantis", False)

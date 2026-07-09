@@ -1,4 +1,5 @@
 """Defines the main REPEX class for path handling and permanent calc."""
+
 import logging
 import os
 import time
@@ -22,69 +23,39 @@ logger = logging.getLogger("main")  # pylint: disable=invalid-name
 logger.addHandler(logging.NullHandler())
 DATE_FORMAT = "%Y.%m.%d %H:%M:%S"
 
-_NUMBA_DISABLED = os.environ.get("INFRETIS_DISABLE_NUMBA", "").lower() in {
-    "1",
-    "true",
-    "yes",
-}
-_USE_NUMBA = njit is not None and not _NUMBA_DISABLED
+NUMBA_AVAILABLE = njit is not None
 
 
-# Numba does not support np.longdouble reliably across platforms. These helpers
-# intentionally use float64 and the public methods cast back to longdouble.
+# Numba does not support np.longdouble reliably across platforms.
 if njit is not None:
 
     @njit(cache=True)
-    def _permanent_minor_glynn_numba(scaled_arr, skip_row, skip_col):
-        """Glynn permanent with one row and one column removed."""
-        full_n = scaled_arr.shape[0]
-        n = full_n - 1
-        row_comb = np.zeros(n, dtype=np.float64)
+    def _fast_glynn_perm64(M):
+        """Float64 Glynn permanent."""
+        row_comb = np.zeros(len(M), dtype=np.float64)
+        for row in range(len(M)):
+            for col in range(len(M)):
+                row_comb[col] += M[row, col]
 
-        for minor_row in range(n):
-            source_row = minor_row
-            if source_row >= skip_row:
-                source_row += 1
-            minor_col = 0
-            for source_col in range(full_n):
-                if source_col == skip_col:
-                    continue
-                row_comb[minor_col] += scaled_arr[source_row, source_col]
-                minor_col += 1
-
-        num_loops = 1 << (n - 1)
         total = 0.0
         old_grey = 0
         sign = 1.0
+        num_loops = 2 ** (len(M) - 1)
 
         for bin_index in range(1, num_loops + 1):
             prod = 1.0
-            for col in range(n):
-                prod *= row_comb[col]
+            for value in row_comb:
+                prod *= value
             total += sign * prod
 
-            new_grey = bin_index ^ (bin_index >> 1)
+            new_grey = bin_index ^ (bin_index // 2)
             grey_diff = old_grey ^ new_grey
             grey_diff_index = 0
-            while (grey_diff >> grey_diff_index) & 1 == 0:
+            while 2**grey_diff_index != grey_diff:
                 grey_diff_index += 1
-
-            if old_grey > new_grey:
-                direction = 2.0
-            else:
-                direction = -2.0
-
-            source_row = grey_diff_index
-            if source_row >= skip_row:
-                source_row += 1
-            minor_col = 0
-            for source_col in range(full_n):
-                if source_col == skip_col:
-                    continue
-                row_comb[minor_col] += (
-                    scaled_arr[source_row, source_col] * direction
-                )
-                minor_col += 1
+            direction = 2.0 if old_grey > new_grey else -2.0
+            for col in range(len(M)):
+                row_comb[col] += M[grey_diff_index, col] * direction
 
             sign = -sign
             old_grey = new_grey
@@ -92,93 +63,40 @@ if njit is not None:
         return total / num_loops
 
     @njit(cache=True)
-    def _permanent_prob_numba(arr):
-        """Compiled implementation of REPEX_state.permanent_prob."""
-        n = arr.shape[0]
-        scaled_arr = arr.copy()
-        out = np.zeros((n, n), dtype=np.float64)
-
-        for row in range(n):
-            row_max = 0.0
-            for col in range(n):
-                if scaled_arr[row, col] > row_max:
-                    row_max = scaled_arr[row, col]
-            if row_max != 0.0:
-                for col in range(n):
-                    scaled_arr[row, col] /= row_max
-
-        for row in range(n):
-            for col in range(n):
-                if scaled_arr[row, col] == 0.0:
-                    continue
-                out[row, col] = (
-                    _permanent_minor_glynn_numba(scaled_arr, row, col)
-                    * scaled_arr[row, col]
-                )
-
-        max_row_sum = 0.0
-        for row in range(n):
-            row_sum = 0.0
-            for col in range(n):
-                row_sum += out[row, col]
-            if row_sum > max_row_sum:
-                max_row_sum = row_sum
-
-        if max_row_sum != 0.0:
-            for row in range(n):
-                for col in range(n):
-                    out[row, col] /= max_row_sum
-
-        return out
-
-    @njit(cache=True)
     def _random_prob_numba(arr, seed, n=10_000):
-        """Compiled implementation of REPEX_state.random_prob."""
+        """Float64 implementation of REPEX_state.random_prob."""
         np.random.seed(seed)
         size = arr.shape[0]
         out = np.zeros((size, size), dtype=np.float64)
         row_at_col = np.empty(size, dtype=np.int64)
-        max_float = np.finfo(np.float64).max
-
-        for idx in range(size):
-            out[idx, idx] = 1.0
-            row_at_col[idx] = idx
-
         choices = size // 2
         even = choices * 2 == size
+        max_float = np.finfo(np.float64).max
 
         prob_right = np.empty((size, size), dtype=np.float64)
         prob_left = np.empty((size, size), dtype=np.float64)
         for row in range(size):
             for col in range(size):
                 denom = arr[row, col]
-                if col == size - 1:
-                    right_num = arr[row, 0]
-                else:
-                    right_num = arr[row, col + 1]
-                if col == 0:
-                    left_num = arr[row, size - 1]
-                else:
-                    left_num = arr[row, col - 1]
-
+                right = arr[row, (col + 1) % size]
+                left = arr[row, (col - 1) % size]
                 if denom == 0.0:
-                    if right_num == 0.0:
-                        prob_right[row, col] = 0.0
-                    else:
-                        prob_right[row, col] = max_float
-                    if left_num == 0.0:
-                        prob_left[row, col] = 0.0
-                    else:
-                        prob_left[row, col] = max_float
+                    prob_right[row, col] = 0.0 if right == 0.0 else max_float
+                    prob_left[row, col] = 0.0 if left == 0.0 else max_float
                 else:
-                    prob_right[row, col] = right_num / denom
-                    prob_left[row, col] = left_num / denom
+                    prob_right[row, col] = right / denom
+                    prob_left[row, col] = left / denom
 
         start = 0
+        for idx in range(size):
+            row_at_col[idx] = idx
+            out[idx, idx] = 1.0
+
         for _ in range(n):
             direction = -1 if np.random.random() < 0.5 else 1
             if not even:
                 start = np.random.randint(0, 2)
+
             if not even:
                 start = np.random.randint(0, 2)
 
@@ -186,16 +104,14 @@ if njit is not None:
                 for j in range(choices):
                     idx = j * 2 + start
                     other = idx - 1
-                    if other < 0:
-                        other = size - 1
                     prob = (
                         prob_left[row_at_col[idx], idx]
                         * prob_right[row_at_col[other], other]
                     )
                     if np.random.random() < prob:
-                        row_tmp = row_at_col[idx]
-                        row_at_col[idx] = row_at_col[other]
-                        row_at_col[other] = row_tmp
+                        tmp = row_at_col[other]
+                        row_at_col[other] = row_at_col[idx]
+                        row_at_col[idx] = tmp
             else:
                 for j in range(choices):
                     idx = j * 2 + start
@@ -205,9 +121,9 @@ if njit is not None:
                         * prob_left[row_at_col[other], other]
                     )
                     if np.random.random() < prob:
-                        row_tmp = row_at_col[idx]
-                        row_at_col[idx] = row_at_col[other]
-                        row_at_col[other] = row_tmp
+                        tmp = row_at_col[other]
+                        row_at_col[other] = row_at_col[idx]
+                        row_at_col[idx] = tmp
 
             for col in range(size):
                 out[row_at_col[col], col] += 1.0
@@ -215,7 +131,7 @@ if njit is not None:
         return out / (n + 1)
 
 else:
-    _permanent_prob_numba = None
+    _fast_glynn_perm64 = None
     _random_prob_numba = None
 
 
@@ -282,6 +198,14 @@ class REPEX_state:
         self._trajs = [""] * n
         self.zeroswap = config["simulation"]["zeroswap"]
         self.pick_scheme = config["simulation"]["pick_scheme"]
+        use_numba = config["simulation"].get("numba")
+        if use_numba is None:
+            use_numba = NUMBA_AVAILABLE
+        elif isinstance(use_numba, str):
+            use_numba = use_numba.lower() != "false"
+        self.use_numba = NUMBA_AVAILABLE and bool(use_numba)
+        if self.use_numba:
+            logger.info("Permanents are calculated with Numba!")
 
         # detect any locked ens-path pairs exist pre start
         self.locked0 = list(self.config["current"].get("locked", []))
@@ -780,12 +704,7 @@ class REPEX_state:
                     out[start:stop, cstart:cstop:direction] = temp
                 elif len(subarr) <= 12:
                     # We can run this subsecond
-                    if _USE_NUMBA:
-                        temp = _permanent_prob_numba(
-                            np.asarray(subarr, dtype=np.float64)
-                        ).astype(np.longdouble)
-                    else:
-                        temp = self.permanent_prob(subarr)
+                    temp = self.permanent_prob(subarr)
                     out[start:stop, cstart:cstop:direction] = temp
                 else:
                     self._random_count += 1
@@ -795,15 +714,7 @@ class REPEX_state:
                         f"dims = {len(subarr)}"
                     )
                     # do n random parallel samples
-                    if _USE_NUMBA:
-                        seed = int(
-                            self.rgen.integers(0, np.iinfo(np.int32).max)
-                        )
-                        temp = _random_prob_numba(
-                            np.asarray(subarr, dtype=np.float64), seed
-                        ).astype(np.longdouble)
-                    else:
-                        temp = self.random_prob(subarr)
+                    temp = self.random_prob(subarr)
                     out[start:stop, cstart:cstop:direction] = temp
 
         out[sort_idx] = out.copy()  # COPY REQUIRED TO NOT BRAKE STATE!!!
@@ -815,9 +726,11 @@ class REPEX_state:
         # edge case that negative probs exist: set to zero
         if np.sum(out < 0) > 0:
             out[out < 0] = 0
-            logger.info(f"Found {int(np.sum(out<0))} precision \
+            logger.info(
+                f"Found {int(np.sum(out<0))} precision \
                 errors in the P-matrix, setting negative \
-                elements to 0. min: {np.min(out):.3e}")
+                elements to 0. min: {np.min(out):.3e}"
+            )
 
         # reinsert zeroes for the locked ensembles
         final_out_rows = np.insert(out, insert_list, 0, axis=0)
@@ -882,12 +795,23 @@ class REPEX_state:
                     continue
                 columns = [r for r in range(n) if r != j]
                 M = sub_arr[:, columns]
-                f = self.fast_glynn_perm(M)
+                if self.use_numba:
+                    f = np.longdouble(
+                        _fast_glynn_perm64(np.asarray(M, dtype=np.float64))
+                    )
+                else:
+                    f = self.fast_glynn_perm(M)
                 out[i][j] = f * scaled_arr[i][j]
         return out / max(np.sum(out, axis=1))
 
     def random_prob(self, arr, n=10_000):
         """P matrix calculation for specific W matrix."""
+        if self.use_numba:
+            seed = int(self.rgen.integers(0, np.iinfo(np.int32).max))
+            return _random_prob_numba(
+                np.asarray(arr, dtype=np.float64), seed, n
+            ).astype(np.longdouble)
+
         out = np.eye(len(arr), dtype="longdouble")
         current_state = np.eye(len(arr))
         choices = len(arr) // 2
